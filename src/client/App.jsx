@@ -58,6 +58,9 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [user, setUser] = useState(null);
 
+  // Navigation
+  const [menuOpen, setMenuOpen] = useState(false);
+
   // Assistant
   const [phase, setPhase] = useState("ready");
   const [view, setView] = useState("assistant");
@@ -166,6 +169,7 @@ export default function App() {
       setAuthError("");
       setView("assistant");
       setPhase("ready");
+      setMenuOpen(false);
     } catch (err) {
       setAuthError(
         err.message || "Server se connect nahi ho paaya."
@@ -181,6 +185,7 @@ export default function App() {
     setView("assistant");
     setPhase("ready");
     setAuthError("");
+    setMenuOpen(false);
   }
 
   function openAuth(mode) {
@@ -190,6 +195,7 @@ export default function App() {
     setConfirmPassword("");
     setAuthError("");
     setAuthStatus("form");
+    setMenuOpen(false);
   }
 
   async function handleLogout() {
@@ -212,6 +218,7 @@ export default function App() {
     setAuthStatus("choice");
     setView("assistant");
     setPhase("ready");
+    setMenuOpen(false);
 
     setCommandText("");
     setCorrectionText("");
@@ -268,6 +275,7 @@ export default function App() {
     setView("customers");
     setCustomerSearch("");
     setLedgerError("");
+    setMenuOpen(false);
     loadCustomers();
   }
 
@@ -281,6 +289,12 @@ export default function App() {
     setView("assistant");
     setSelectedLedger(null);
     setLedgerError("");
+    setMenuOpen(false);
+  }
+
+  function openNavigationAssistant() {
+    backToAssistant();
+    setMenuOpen(false);
   }
 
   async function processCommand(text) {
@@ -533,14 +547,135 @@ Return the same required JSON structure.
     customer.name.toLowerCase().includes(customerSearch.toLowerCase())
   );
 
+  // Reusable top navigation.
+  function TopBar({ showMenu = false }) {
+    return (
+      <header className="assistant-header">
+        <div className="brand">
+          <span className="brand-name">Dukaan</span>
+        </div>
+
+        {showMenu && (
+          <div className="header-actions">
+            <span className="header-status">
+              <span className="status-dot"></span>
+              {authStatus === "guest" ? "Guest" : "Online"}
+            </span>
+
+            <button
+              className={`menu-toggle ${menuOpen ? "menu-active" : ""}`}
+              type="button"
+              onClick={() => setMenuOpen((previous) => !previous)}
+              aria-label="Toggle navigation menu"
+              aria-expanded={menuOpen}
+            >
+              <span></span>
+              <span></span>
+              <span></span>
+            </button>
+          </div>
+        )}
+      </header>
+    );
+  }
+
+  // Navigation sidebar.
+  function NavigationMenu() {
+    if (!menuOpen) return null;
+
+    return (
+      <>
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setMenuOpen(false)}
+        />
+
+        <aside className="assistant-sidebar">
+          <div className="sidebar-heading">
+            <span className="brand-name">Dukaan</span>
+
+            <button
+              className="sidebar-close"
+              type="button"
+              onClick={() => setMenuOpen(false)}
+              aria-label="Close menu"
+            >
+              ×
+            </button>
+          </div>
+
+          <p className="sidebar-label">MENU</p>
+
+          <button
+            className={`sidebar-link ${view === "assistant" ? "active" : ""}`}
+            type="button"
+            onClick={openNavigationAssistant}
+          >
+            <span className="sidebar-icon">⌂</span>
+            Assistant
+          </button>
+
+          {authStatus === "user" && (
+            <button
+              className={`sidebar-link ${view === "customers" ? "active" : ""}`}
+              type="button"
+              onClick={openKhata}
+            >
+              <span className="sidebar-icon">▤</span>
+              Customer Khata
+            </button>
+          )}
+
+          <div className="sidebar-bottom">
+            {authStatus === "user" && (
+              <>
+                <div className="sidebar-account">
+                  <span className="account-avatar">
+                    {user?.email?.charAt(0).toUpperCase() || "U"}
+                  </span>
+
+                  <span className="account-email">
+                    {user?.email || "Your account"}
+                  </span>
+                </div>
+
+                <button
+                  className="sidebar-link logout-link"
+                  type="button"
+                  onClick={handleLogout}
+                >
+                  <span className="sidebar-icon">↪</span>
+                  Logout
+                </button>
+              </>
+            )}
+
+            {authStatus === "guest" && (
+              <button
+                className="sidebar-link"
+                type="button"
+                onClick={() => openAuth("login")}
+              >
+                <span className="sidebar-icon">↪</span>
+                Login
+              </button>
+            )}
+          </div>
+        </aside>
+      </>
+    );
+  }
+
   // Initial session check.
   if (authStatus === "checking") {
     return (
       <main className="assistant-app">
+        <TopBar />
+
         <section className="assistant-main">
           <div className="thinking-panel">
             <div className="thinking-loader"></div>
-            <strong>Dukaan AI load ho raha hai...</strong>
+            <strong>Dukaan load ho raha hai...</strong>
           </div>
         </section>
       </main>
@@ -551,17 +686,7 @@ Return the same required JSON structure.
   if (authStatus === "choice" || authStatus === "form") {
     return (
       <main className="assistant-app">
-        <header className="assistant-header">
-          <div className="brand">
-            <span className="brand-icon">D</span>
-            <span>Dukaan AI</span>
-          </div>
-
-          <span className="header-status">
-            <span className="status-dot"></span>
-            Welcome
-          </span>
-        </header>
+        <TopBar />
 
         <section className="assistant-main">
           <div className="ai-orb orb-ready">
@@ -580,7 +705,7 @@ Return the same required JSON structure.
 
               <section className="assistant-popup">
                 <div className="popup-heading">
-                  Dukaan AI mein aapka swagat hai
+                  Dukaan mein aapka swagat hai
                 </div>
 
                 <p className="understanding-text">
@@ -633,7 +758,7 @@ Return the same required JSON structure.
 
               <p className="assistant-subtitle">
                 {authMode === "signup"
-                  ? "Apna Dukaan AI account banayein."
+                  ? "Apna Dukaan account banayein."
                   : "Apne account mein login karein."}
               </p>
 
@@ -711,13 +836,13 @@ Return the same required JSON structure.
                 <button
                   className="text-button"
                   type="button"
-                  onClick={() => openAuth(
-                    authMode === "signup" ? "login" : "signup"
-                  )}
+                  onClick={() =>
+                    openAuth(authMode === "signup" ? "login" : "signup")
+                  }
                 >
                   {authMode === "signup"
                     ? "Already have an account? Login"
-                    : "New to Dukaan AI? Create account"}
+                    : "New to Dukaan? Create account"}
                 </button>
 
                 <button
@@ -735,7 +860,7 @@ Return the same required JSON structure.
           )}
 
           <p className="privacy-note">
-            Dukaan AI · Your Voice-First Business Assistant
+            Dukaan · Your Voice-First Business Assistant
           </p>
         </section>
       </main>
@@ -744,53 +869,8 @@ Return the same required JSON structure.
 
   return (
     <main className="assistant-app">
-      <header className="assistant-header">
-        <div className="brand">
-          <span className="brand-icon">D</span>
-          <span>Dukaan AI</span>
-        </div>
-
-        <div className="header-actions">
-          {authStatus === "user" && (
-            <>
-              <button
-                className="khata-nav-button"
-                type="button"
-                onClick={view === "assistant" ? openKhata : backToAssistant}
-              >
-                {view === "assistant" ? "Khata" : "Assistant"}
-              </button>
-
-              <button
-                className="khata-nav-button"
-                type="button"
-                onClick={handleLogout}
-              >
-                Logout
-              </button>
-            </>
-          )}
-
-          {authStatus === "guest" && (
-            <button
-              className="khata-nav-button"
-              type="button"
-              onClick={() => setAuthStatus("choice")}
-            >
-              Login
-            </button>
-          )}
-
-          <span className="header-status">
-            <span className="status-dot"></span>
-            {authStatus === "guest"
-              ? "Guest"
-              : view === "assistant"
-                ? "Assistant"
-                : "Khata"}
-          </span>
-        </div>
-      </header>
+      <TopBar showMenu />
+      <NavigationMenu />
 
       {view === "customers" && authStatus === "user" ? (
         <section className="ledger-main">
@@ -931,7 +1011,7 @@ Return the same required JSON structure.
           )}
 
           <p className="privacy-note">
-            Dukaan AI · Customer Khata
+            Dukaan · Customer Khata
           </p>
         </section>
       ) : (
@@ -955,6 +1035,7 @@ Return the same required JSON structure.
             {phase === "listening" && "Main sun raha hoon..."}
             {phase === "thinking" && "Samajh raha hoon..."}
             {phase === "review" && "Ek baar check kijiye"}
+            {phase === "correction" && "Correction"}
             {phase === "saving" && "Record save ho raha hai..."}
             {phase === "saved" && "Transaction saved!"}
           </h1>
@@ -964,6 +1045,7 @@ Return the same required JSON structure.
             {phase === "listening" && "Apni baat poori karein. Main dhyan se sun raha hoon."}
             {phase === "thinking" && "Aapki baat samajhne ki koshish kar raha hoon."}
             {phase === "review" && "Maine aapki baat ko is tarah samjha hai."}
+            {phase === "correction" && "Batayein, kya badalna hai."}
             {phase === "saving" && "Aapka transaction database mein save kar raha hoon."}
             {phase === "saved" && "Aapka transaction successfully record ho gaya hai."}
           </p>
@@ -1258,7 +1340,7 @@ Return the same required JSON structure.
 
           {authStatus !== "guest" && authStatus !== "user" && (
             <p className="privacy-note">
-              Dukaan AI · Your Voice-First Business Assistant
+              Dukaan · Your Voice-First Business Assistant
             </p>
           )}
         </section>
