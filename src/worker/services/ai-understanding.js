@@ -180,8 +180,19 @@ export async function understandWithAI(ai, input) {
           ? "unsupported"
           : "ready_for_review";
 
+  const message =
+    status === "needs_clarification"
+      ? parsed.clarification ||
+        "Mujhe thodi aur information chahiye."
+      : status === "unsupported"
+        ? parsed.clarification ||
+          "Main is command ko samajh nahi paaya."
+        : parsed.understanding ||
+          "Maine aapka command samajh liya hai. Details check karein.";
+
   return {
     success: true,
+    message,
     intent: parsed.intent,
     customer,
     amount,
@@ -191,6 +202,7 @@ export async function understandWithAI(ai, input) {
         : null,
     quantity:
       typeof parsed.quantity === "number" &&
+      Number.isFinite(parsed.quantity) &&
       parsed.quantity > 0
         ? parsed.quantity
         : null,
