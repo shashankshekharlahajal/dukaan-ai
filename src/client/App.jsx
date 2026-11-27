@@ -74,6 +74,18 @@ export default function App() {
     }
   }
 
+  function handleTranscriptChange(event) {
+    setTranscript(event.target.value);
+    setCommandResult(null);
+    setError("");
+  }
+
+  function handleNewCommand() {
+    setTranscript("");
+    setCommandResult(null);
+    setError("");
+  }
+
   return (
     <main className="app">
       <header className="app-header">
@@ -125,52 +137,89 @@ export default function App() {
           {isListening ? "Stop Listening" : "Start Speaking"}
         </button>
 
-        {transcript && (
+        {transcript !== "" && (
           <div className="transcript-box">
-            <strong>Your words:</strong>
-            <p>{transcript}</p>
+            <div className="review-heading">
+              <strong>Your spoken command</strong>
+              <span className="review-tag">Editable</span>
+            </div>
+
+            <textarea
+              className="transcript-input"
+              value={transcript}
+              onChange={handleTranscriptChange}
+              placeholder="Your spoken words will appear here..."
+              rows={3}
+              disabled={isListening || isProcessing}
+            />
+
+            <p className="edit-hint">
+              Spelling ya words galat hain toh yahan correct karein.
+            </p>
 
             <button
               className="understand-button"
               type="button"
               onClick={handleUnderstandCommand}
-              disabled={isProcessing || isListening}
+              disabled={isProcessing || isListening || !transcript.trim()}
             >
               {isProcessing
                 ? "Understanding..."
-                : "Understand Command"}
+                : commandResult
+                  ? "Understand Again"
+                  : "Understand Command"}
             </button>
           </div>
         )}
 
         {commandResult && (
           <div className="command-result">
-            <strong>Dukaan AI understood:</strong>
+            <div className="review-heading">
+              <strong>I understood this</strong>
+              <span className="review-tag">Review required</span>
+            </div>
 
-            <p>{commandResult.message}</p>
+            <p className="ai-message">
+              {commandResult.message}
+            </p>
 
             {commandResult.intent && (
-              <p>
-                <strong>Intent:</strong> {commandResult.intent}
-              </p>
+              <div className="detail-row">
+                <span>Action</span>
+                <strong>{commandResult.intent}</strong>
+              </div>
             )}
 
             {commandResult.customer && (
-              <p>
-                <strong>Customer:</strong> {commandResult.customer}
-              </p>
+              <div className="detail-row">
+                <span>Customer</span>
+                <strong>{commandResult.customer}</strong>
+              </div>
             )}
 
-            {commandResult.amount !== null &&
-              commandResult.amount !== undefined && (
-                <p>
-                  <strong>Amount:</strong> ₹{commandResult.amount}
-                </p>
-              )}
+            {commandResult.amount != null && (
+              <div className="detail-row">
+                <span>Amount</span>
+                <strong>₹{commandResult.amount}</strong>
+              </div>
+            )}
 
-            <p>
-              <strong>Status:</strong> {commandResult.status}
+            <div className="detail-row">
+              <span>Status</span>
+              <strong>{commandResult.status}</strong>
+            </div>
+
+            <p className="review-notice">
+              Please check these details. No transaction has been saved.
             </p>
+
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={handleNewCommand}
+            >
+              Start New Command
+            </button>
           </div>
         )}
 
