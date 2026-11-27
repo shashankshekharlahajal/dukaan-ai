@@ -1,5 +1,5 @@
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./styles/main.css";
 import { createSpeechRecognition } from "./services/speechRecognition.js";
 import {
@@ -16,7 +16,10 @@ function createRequestId() {
 }
 
 async function fetchApi(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    credentials: "same-origin"
+  });
+
   const result = await response.json();
 
   if (!response.ok || result.success === false) {
@@ -45,6 +48,17 @@ function formatDate(date) {
 export default function App() {
   const recognitionRef = useRef(null);
 
+  // Authentication
+  const [authStatus, setAuthStatus] = useState("checking");
+  const [authMode, setAuthMode] = useState("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [user, setUser] = useState(null);
+
+  // Assistant
   const [phase, setPhase] = useState("ready");
   const [view, setView] = useState("assistant");
 
@@ -58,11 +72,33 @@ export default function App() {
   const [error, setError] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Customer ledger
   const [customers, setCustomers] = useState([]);
   const [selectedLedger, setSelectedLedger] = useState(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
+
+  // Check existing login session.
+  useEffect(() => {
+    async function checkSession() {
+      try {
+        const result = await fetchApi("/api/auth/me");
+
+        if (result.user) {
+          setUser(result.user);
+          setAuthStatus("user");
+        } else {
+          setAuthStatus("choice");
+        }
+      } catch {
+        setUser(null);
+        setAuthStatus("choice");
+      }
+    }
+
+    checkSession();
+  }, []);
 
   function speak(message) {
     if (!message || !window.speechSynthesis) return;
@@ -74,6 +110,117 @@ export default function App() {
     utterance.rate = 0.95;
 
     window.speechSynthesis.speak(utterance);
+  }
+
+  // Signup and login
+  async function handleAuthSubmit(event) {
+    event.preventDefault();
+
+    setAuthError("");
+
+    if (!authEmail.trim() || !authPassword) {
+      setAuthError("Email aur password enter karein.");
+      return;
+    }
+
+    if (authMode === "signup") {
+      if (authPassword !== confirmPassword) {
+        setAuthError("Dono passwords match nahi karte.");
+        return;
+      }
+
+      if (authPassword.length < 8) {
+        setAuthError("Password kam se kam 8 characters ka hona chahiye.");
+        return;
+      }
+    }
+
+    setAuthLoading(true);
+
+    try {
+      const response = await fetch(`/api/auth/${authMode}`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          email: authEmail.trim(),
+          password: authPassword
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || result.success === false) {
+        throw new Error(
+          result.message || "Authentication nahi ho paaya."
+        );
+      }
+
+      setUser(result.user);
+      setAuthStatus("user");
+
+      setAuthPassword("");
+      setConfirmPassword("");
+      setAuthError("");
+      setView("assistant");
+      setPhase("ready");
+    } catch (err) {
+      setAuthError(
+        err.message || "Server se connect nahi ho paaya."
+      );
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  function continueAsGuest() {
+    setUser(null);
+    setAuthStatus("guest");
+    setView("assistant");
+    setPhase("ready");
+    setAuthError("");
+  }
+
+  function openAuth(mode) {
+    setAuthMode(mode);
+    setAuthEmail("");
+    setAuthPassword("");
+    setConfirmPassword("");
+    setAuthError("");
+    setAuthStatus("form");
+  }
+
+  async function handleLogout() {
+    recognitionRef.current?.abort();
+
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "same-origin"
+      });
+    } catch (err) {
+      console.error("LOGOUT ERROR:", err);
+    }
+
+    setUser(null);
+    setAuthStatus("choice");
+    setView("assistant");
+    setPhase("ready");
+
+    setCommandText("");
+    setCorrectionText("");
+    setCommandResult(null);
+    setTransactionResult(null);
+    setRequestId("");
+    setCustomers([]);
+    setSelectedLedger(null);
+    setError("");
   }
 
   async function loadCustomers() {
@@ -110,6 +257,8 @@ export default function App() {
   }
 
   function openKhata() {
+    if (authStatus !== "user") return;
+
     recognitionRef.current?.abort();
 
     if (window.speechSynthesis) {
@@ -302,6 +451,11 @@ Return the same required JSON structure.
   }
 
   async function handleConfirm() {
+    if (authStatus !== "user") {
+      setError("Transaction save karne ke liye account banana ya login karna zaroori hai.");
+      return;
+    }
+
     if (
       isProcessing ||
       phase !== "review" ||
@@ -313,8 +467,8 @@ Return the same required JSON structure.
 
     if (
       !commandResult.customer ||
-      !Number.isSafeInteger(commandResult.amount) ||
-      commandResult.amount <= 0 ||
+      !Number.isFinite(Number(commandResult.amount)) ||
+      Number(commandResult.amount) <= 0 ||
       !["add_credit", "record_payment"].includes(commandResult.intent)
     ) {
       setError("Transaction details valid nahi hain. Dobara check karein.");
@@ -329,7 +483,7 @@ Return the same required JSON structure.
       const result = await confirmTransaction({
         confirmed: true,
         customer: commandResult.customer,
-        amount: commandResult.amount,
+        amount: Number(commandResult.amount),
         intent: commandResult.intent,
         originalCommand: commandText,
         requestId
@@ -379,6 +533,215 @@ Return the same required JSON structure.
     customer.name.toLowerCase().includes(customerSearch.toLowerCase())
   );
 
+  // Initial session check.
+  if (authStatus === "checking") {
+    return (
+      <main className="assistant-app">
+        <section className="assistant-main">
+          <div className="thinking-panel">
+            <div className="thinking-loader"></div>
+            <strong>Dukaan AI load ho raha hai...</strong>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  // Welcome, login and signup screens.
+  if (authStatus === "choice" || authStatus === "form") {
+    return (
+      <main className="assistant-app">
+        <header className="assistant-header">
+          <div className="brand">
+            <span className="brand-icon">D</span>
+            <span>Dukaan AI</span>
+          </div>
+
+          <span className="header-status">
+            <span className="status-dot"></span>
+            Welcome
+          </span>
+        </header>
+
+        <section className="assistant-main">
+          <div className="ai-orb orb-ready">
+            <div className="orb-inner">
+              <span className="orb-icon">✦</span>
+            </div>
+          </div>
+
+          {authStatus === "choice" ? (
+            <>
+              <h1>Namaste! 👋</h1>
+
+              <p className="assistant-subtitle">
+                Aapki dukaan ka smart business assistant.
+              </p>
+
+              <section className="assistant-popup">
+                <div className="popup-heading">
+                  Dukaan AI mein aapka swagat hai
+                </div>
+
+                <p className="understanding-text">
+                  Apne account se login karein ya naya account banayein.
+                </p>
+
+                <div className="popup-actions">
+                  <button
+                    className="popup-primary"
+                    type="button"
+                    onClick={() => openAuth("login")}
+                  >
+                    Login
+                  </button>
+
+                  <button
+                    className="popup-secondary"
+                    type="button"
+                    onClick={() => openAuth("signup")}
+                  >
+                    Create account
+                  </button>
+                </div>
+
+                <div className="popup-divider">
+                  <span>ya</span>
+                </div>
+
+                <button
+                  className="popup-mic"
+                  type="button"
+                  onClick={continueAsGuest}
+                >
+                  Continue as Guest
+                </button>
+
+                <p className="privacy-note">
+                  Guest mode mein aap AI try kar sakte hain.
+                  Aapke commands database mein save nahi honge.
+                </p>
+              </section>
+            </>
+          ) : (
+            <>
+              <h1>
+                {authMode === "signup"
+                  ? "Create your account"
+                  : "Welcome back"}
+              </h1>
+
+              <p className="assistant-subtitle">
+                {authMode === "signup"
+                  ? "Apna Dukaan AI account banayein."
+                  : "Apne account mein login karein."}
+              </p>
+
+              <section className="assistant-popup">
+                <div className="popup-heading">
+                  {authMode === "signup" ? "Sign up" : "Login"}
+                </div>
+
+                <form onSubmit={handleAuthSubmit}>
+                  <input
+                    className="compact-input"
+                    type="email"
+                    value={authEmail}
+                    onChange={(event) => setAuthEmail(event.target.value)}
+                    placeholder="Email address"
+                    autoComplete="email"
+                    required
+                  />
+
+                  <input
+                    className="compact-input"
+                    type="password"
+                    value={authPassword}
+                    onChange={(event) => setAuthPassword(event.target.value)}
+                    placeholder="Password"
+                    autoComplete={
+                      authMode === "signup"
+                        ? "new-password"
+                        : "current-password"
+                    }
+                    minLength={8}
+                    maxLength={128}
+                    required
+                  />
+
+                  {authMode === "signup" && (
+                    <input
+                      className="compact-input"
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(event) =>
+                        setConfirmPassword(event.target.value)
+                      }
+                      placeholder="Confirm password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      maxLength={128}
+                      required
+                    />
+                  )}
+
+                  {authError && (
+                    <p className="assistant-error" role="alert">
+                      {authError}
+                    </p>
+                  )}
+
+                  <button
+                    className="popup-primary"
+                    type="submit"
+                    disabled={authLoading}
+                  >
+                    {authLoading
+                      ? "Please wait..."
+                      : authMode === "signup"
+                        ? "Create account"
+                        : "Login"}
+                  </button>
+                </form>
+
+                <div className="popup-divider">
+                  <span>or</span>
+                </div>
+
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => openAuth(
+                    authMode === "signup" ? "login" : "signup"
+                  )}
+                >
+                  {authMode === "signup"
+                    ? "Already have an account? Login"
+                    : "New to Dukaan AI? Create account"}
+                </button>
+
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => {
+                    setAuthStatus("choice");
+                    setAuthError("");
+                  }}
+                >
+                  ← Back
+                </button>
+              </section>
+            </>
+          )}
+
+          <p className="privacy-note">
+            Dukaan AI · Your Voice-First Business Assistant
+          </p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="assistant-app">
       <header className="assistant-header">
@@ -388,22 +751,48 @@ Return the same required JSON structure.
         </div>
 
         <div className="header-actions">
-          <button
-            className="khata-nav-button"
-            type="button"
-            onClick={view === "assistant" ? openKhata : backToAssistant}
-          >
-            {view === "assistant" ? "Khata" : "Assistant"}
-          </button>
+          {authStatus === "user" && (
+            <>
+              <button
+                className="khata-nav-button"
+                type="button"
+                onClick={view === "assistant" ? openKhata : backToAssistant}
+              >
+                {view === "assistant" ? "Khata" : "Assistant"}
+              </button>
+
+              <button
+                className="khata-nav-button"
+                type="button"
+                onClick={handleLogout}
+              >
+                Logout
+              </button>
+            </>
+          )}
+
+          {authStatus === "guest" && (
+            <button
+              className="khata-nav-button"
+              type="button"
+              onClick={() => setAuthStatus("choice")}
+            >
+              Login
+            </button>
+          )}
 
           <span className="header-status">
             <span className="status-dot"></span>
-            {view === "assistant" ? "Assistant" : "Khata"}
+            {authStatus === "guest"
+              ? "Guest"
+              : view === "assistant"
+                ? "Assistant"
+                : "Khata"}
           </span>
         </div>
       </header>
 
-      {view === "customers" ? (
+      {view === "customers" && authStatus === "user" ? (
         <section className="ledger-main">
           <div className="ledger-top">
             {selectedLedger && (
@@ -517,9 +906,7 @@ Return the same required JSON structure.
                           {isCredit ? "Naya udhaar" : "Payment received"}
                         </strong>
 
-                        <span>
-                          {formatDate(transaction.createdAt)}
-                        </span>
+                        <span>{formatDate(transaction.createdAt)}</span>
 
                         {transaction.originalCommand && (
                           <small>{transaction.originalCommand}</small>
@@ -629,7 +1016,9 @@ Return the same required JSON structure.
                 </div>
 
                 <strong>
-                  {correctionText ? "Correction sun raha hoon" : "Aapki baat sun raha hoon"}
+                  {correctionText
+                    ? "Correction sun raha hoon"
+                    : "Aapki baat sun raha hoon"}
                 </strong>
 
                 <p>{correctionText || commandText || "Boliye..."}</p>
@@ -687,31 +1076,66 @@ Return the same required JSON structure.
 
                 {commandResult.status === "ready_for_review" ? (
                   <>
-                    <p className="popup-question">Kya maine sahi samjha?</p>
+                    <p className="popup-question">
+                      {authStatus === "guest"
+                        ? "Guest mode mein transaction save nahi hoga."
+                        : "Kya maine sahi samjha?"}
+                    </p>
 
-                    <div className="popup-actions">
-                      <button
-                        className="popup-primary"
-                        type="button"
-                        onClick={handleConfirm}
-                        disabled={isProcessing}
-                      >
-                        ✓ Haan, record karo
-                      </button>
+                    {authStatus === "user" ? (
+                      <div className="popup-actions">
+                        <button
+                          className="popup-primary"
+                          type="button"
+                          onClick={handleConfirm}
+                          disabled={isProcessing}
+                        >
+                          ✓ Haan, record karo
+                        </button>
 
-                      <button
-                        className="popup-secondary"
-                        type="button"
-                        onClick={() => {
-                          setCorrectionText("");
-                          setError("");
-                          setPhase("correction");
-                        }}
-                        disabled={isProcessing}
-                      >
-                        Nahi, badalna hai
-                      </button>
-                    </div>
+                        <button
+                          className="popup-secondary"
+                          type="button"
+                          onClick={() => {
+                            setCorrectionText("");
+                            setError("");
+                            setPhase("correction");
+                          }}
+                          disabled={isProcessing}
+                        >
+                          Nahi, badalna hai
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="popup-actions">
+                        <button
+                          className="popup-primary"
+                          type="button"
+                          onClick={() => {
+                            setCommandResult(null);
+                            setPhase("ready");
+                            setCommandText("");
+                            setRequestId("");
+                            setAuthStatus("choice");
+                          }}
+                        >
+                          Create account to save
+                        </button>
+
+                        <button
+                          className="popup-secondary"
+                          type="button"
+                          onClick={() => {
+                            setPhase("ready");
+                            setCommandText("");
+                            setCommandResult(null);
+                            setRequestId("");
+                          }}
+                        >
+                          Try another command
+                        </button>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -820,9 +1244,23 @@ Return the same required JSON structure.
             </p>
           )}
 
-          <p className="privacy-note">
-            Dukaan AI · Your Voice-First Business Assistant
-          </p>
+          {authStatus === "guest" && (
+            <p className="privacy-note">
+              Guest mode · Commands are not saved
+            </p>
+          )}
+
+          {authStatus === "user" && (
+            <p className="privacy-note">
+              Logged in as {user?.email}
+            </p>
+          )}
+
+          {authStatus !== "guest" && authStatus !== "user" && (
+            <p className="privacy-note">
+              Dukaan AI · Your Voice-First Business Assistant
+            </p>
+          )}
         </section>
       )}
     </main>
