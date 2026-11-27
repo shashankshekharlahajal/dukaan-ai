@@ -2,7 +2,18 @@
 import { useRef, useState } from "react";
 import "./styles/main.css";
 import { createSpeechRecognition } from "./services/speechRecognition.js";
-import { understandShopkeeperCommand } from "./services/api.js";
+import {
+  understandShopkeeperCommand,
+  confirmTransaction
+} from "./services/api.js";
+
+function createRequestId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `dukaan-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 export default function App() {
   const recognitionRef = useRef(null);
@@ -11,8 +22,9 @@ export default function App() {
   const [commandText, setCommandText] = useState("");
   const [correctionText, setCorrectionText] = useState("");
   const [commandResult, setCommandResult] = useState(null);
+  const [transactionResult, setTransactionResult] = useState(null);
+  const [requestId, setRequestId] = useState("");
   const [error, setError] = useState("");
-
   const [isProcessing, setIsProcessing] = useState(false);
 
   function speak(message) {
@@ -38,11 +50,20 @@ export default function App() {
     setError("");
     setPhase("thinking");
     setCommandResult(null);
+    setTransactionResult(null);
+    setRequestId("");
 
     try {
       const result = await understandShopkeeperCommand(text);
 
       setCommandResult(result);
+
+      setRequestId(
+        result.status === "ready_for_review"
+          ? createRequestId()
+          : ""
+      );
+
       setPhase("review");
 
       speak(
@@ -83,12 +104,22 @@ Return the same required JSON structure.
     setIsProcessing(true);
     setError("");
     setPhase("thinking");
+    setRequestId("");
 
     try {
-      const result = await understandShopkeeperCommand(correctedCommand);
+      const result = await understandShopkeeperCommand(
+        correctedCommand
+      );
 
       setCommandResult(result);
       setCorrectionText("");
+
+      setRequestId(
+        result.status === "ready_for_review"
+          ? createRequestId()
+          : ""
+      );
+
       setPhase("review");
 
       speak(
@@ -182,12 +213,54 @@ Return the same required JSON structure.
     processCorrection(correctionText);
   }
 
-  function handleConfirm() {
-    setPhase("confirmed");
+  async function handleConfirm() {
+    if (
+      isProcessing ||
+      phase !== "review" ||
+      commandResult?.status !== "ready_for_review" ||
+      !requestId
+    ) {
+      return;
+    }
 
-    speak(
-      "Aapne details confirm kar di hain. Transaction saving abhi available nahi hai."
-    );
+    if (
+      !commandResult.customer ||
+      !Number.isSafeInteger(commandResult.amount) ||
+      commandResult.amount <= 0 ||
+      !["add_credit", "record_payment"].includes(commandResult.intent)
+    ) {
+      setError("Transaction details valid nahi hain. Dobara check karein.");
+      return;
+    }
+
+    setIsProcessing(true);
+    setError("");
+    setPhase("saving");
+
+    try {
+      const result = await confirmTransaction({
+        confirmed: true,
+        customer: commandResult.customer,
+        amount: commandResult.amount,
+        intent: commandResult.intent,
+        originalCommand: commandText,
+        requestId
+      });
+
+      setTransactionResult(result);
+      setPhase("saved");
+
+      speak(
+        `${result.customer} ka transaction save ho gaya hai. Ab unka baaki balance ${result.balance} rupaye hai.`
+      );
+    } catch (err) {
+      setError(
+        err.message || "Transaction save nahi ho paayi. Dobara try karein."
+      );
+      setPhase("review");
+    } finally {
+      setIsProcessing(false);
+    }
   }
 
   function handleNewCommand() {
@@ -201,11 +274,20 @@ Return the same required JSON structure.
     setCommandText("");
     setCorrectionText("");
     setCommandResult(null);
+    setTransactionResult(null);
+    setRequestId("");
     setError("");
     setIsProcessing(false);
   }
 
   const isListening = phase === "listening";
+
+  const actionLabel =
+    commandResult?.intent === "add_credit"
+      ? "Udhaar add karna"
+      : commandResult?.intent === "record_payment"
+        ? "Payment receive karna"
+        : "Action";
 
   return (
     <main className="assistant-app">
@@ -226,9 +308,9 @@ Return the same required JSON structure.
           <div className="orb-inner">
             {phase === "listening" ? (
               <span className="orb-icon">🎙️</span>
-            ) : phase === "thinking" ? (
+            ) : phase === "thinking" || phase === "saving" ? (
               <span className="orb-icon">✦</span>
-            ) : phase === "confirmed" ? (
+            ) : phase === "saved" ? (
               <span className="orb-icon">✓</span>
             ) : (
               <span className="orb-icon">✦</span>
@@ -241,7 +323,8 @@ Return the same required JSON structure.
           {phase === "listening" && "Main sun raha hoon..."}
           {phase === "thinking" && "Samajh raha hoon..."}
           {phase === "review" && "Ek baar check kijiye"}
-          {phase === "confirmed" && "Details confirmed"}
+          {phase === "saving" && "Record save ho raha hai..."}
+          {phase === "saved" && "Transaction saved!"}
         </h1>
 
         <p className="assistant-subtitle">
@@ -257,8 +340,11 @@ Return the same required JSON structure.
           {phase === "review" &&
             "Maine aapki baat ko is tarah samjha hai."}
 
-          {phase === "confirmed" &&
-            "Aapki details confirm ho gayi hain."}
+          {phase === "saving" &&
+            "Aapka transaction database mein save kar raha hoon."}
+
+          {phase === "saved" &&
+            "Aapka transaction successfully record ho gaya hai."}
         </p>
 
         <section className="assistant-popup" key={phase}>
@@ -280,7 +366,7 @@ Return the same required JSON structure.
                 <button
                   className="popup-primary"
                   type="submit"
-                  disabled={!commandText.trim()}
+                  disabled={!commandText.trim() || isProcessing}
                 >
                   Send command
                   <span>→</span>
@@ -372,7 +458,7 @@ Return the same required JSON structure.
                 {commandResult.intent && (
                   <div>
                     <span>Action</span>
-                    <strong>{commandResult.intent.replaceAll("_", " ")}</strong>
+                    <strong>{actionLabel}</strong>
                   </div>
                 )}
               </div>
@@ -388,8 +474,9 @@ Return the same required JSON structure.
                       className="popup-primary"
                       type="button"
                       onClick={handleConfirm}
+                      disabled={isProcessing}
                     >
-                      <span>✓</span> Correct
+                      <span>✓</span> Haan, record karo
                     </button>
 
                     <button
@@ -400,8 +487,9 @@ Return the same required JSON structure.
                         setError("");
                         setPhase("correction");
                       }}
+                      disabled={isProcessing}
                     >
-                      Change
+                      Nahi, badalna hai
                     </button>
                   </div>
                 </>
@@ -441,7 +529,7 @@ Return the same required JSON structure.
                 <button
                   className="popup-primary"
                   type="submit"
-                  disabled={!correctionText.trim()}
+                  disabled={!correctionText.trim() || isProcessing}
                 >
                   Send correction
                   <span>→</span>
@@ -467,22 +555,42 @@ Return the same required JSON structure.
             </>
           )}
 
-          {phase === "confirmed" && (
+          {phase === "saving" && (
+            <div className="thinking-panel">
+              <div className="thinking-loader"></div>
+              <strong>Transaction save ho raha hai</strong>
+              <p>Kripya is process ko interrupt na karein.</p>
+            </div>
+          )}
+
+          {phase === "saved" && transactionResult && (
             <div className="confirmed-panel">
               <div className="confirmed-icon">✓</div>
-              <strong>Details confirm ho gayi hain!</strong>
+
+              <strong>Transaction successfully saved!</strong>
 
               <p>
-                {commandResult?.customer || "Customer"} ·{" "}
-                {commandResult?.amount != null
-                  ? `₹${commandResult.amount}`
-                  : "Amount pending"}
+                {transactionResult.customer}
               </p>
 
-              <p className="saving-warning">
-                Transaction abhi database mein save nahi hui hai.
-                Saving functionality agle backend step mein banegi.
+              <p>
+                Transaction: ₹{transactionResult.amount}
               </p>
+
+              <p>
+                {transactionResult.transactionType === "add_credit"
+                  ? "Naya udhaar add hua."
+                  : "Payment receive hua."}
+              </p>
+
+              <div className="review-details">
+                <div>
+                  <span>Updated outstanding balance</span>
+                  <strong>
+                    ₹{Number(transactionResult.balance).toLocaleString("en-IN")}
+                  </strong>
+                </div>
+              </div>
 
               <button
                 className="popup-primary"
