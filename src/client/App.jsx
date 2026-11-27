@@ -2,16 +2,20 @@
 import { useRef, useState } from "react";
 import "./styles/main.css";
 import { createSpeechRecognition } from "./services/speechRecognition.js";
+import { understandShopkeeperCommand } from "./services/api.js";
 
 export default function App() {
   const recognitionRef = useRef(null);
 
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [commandResult, setCommandResult] = useState(null);
   const [error, setError] = useState("");
 
   function handleVoiceInput() {
     setError("");
+    setCommandResult(null);
 
     if (isListening) {
       recognitionRef.current?.stop();
@@ -23,7 +27,6 @@ export default function App() {
     const recognition = createSpeechRecognition({
       onStart: () => {
         setIsListening(true);
-        setError("");
       },
 
       onResult: (text) => {
@@ -45,9 +48,29 @@ export default function App() {
 
     try {
       recognition.start();
-    } catch (error) {
+    } catch {
       setIsListening(false);
       setError("Microphone could not start. Please try again.");
+    }
+  }
+
+  async function handleUnderstandCommand() {
+    if (!transcript.trim()) {
+      setError("Please speak or enter a command first.");
+      return;
+    }
+
+    setIsProcessing(true);
+    setError("");
+    setCommandResult(null);
+
+    try {
+      const result = await understandShopkeeperCommand(transcript);
+      setCommandResult(result);
+    } catch (err) {
+      setError(err.message || "Unable to process your command.");
+    } finally {
+      setIsProcessing(false);
     }
   }
 
@@ -97,6 +120,7 @@ export default function App() {
           className="voice-button"
           type="button"
           onClick={handleVoiceInput}
+          disabled={isProcessing}
         >
           {isListening ? "Stop Listening" : "Start Speaking"}
         </button>
@@ -105,6 +129,48 @@ export default function App() {
           <div className="transcript-box">
             <strong>Your words:</strong>
             <p>{transcript}</p>
+
+            <button
+              className="understand-button"
+              type="button"
+              onClick={handleUnderstandCommand}
+              disabled={isProcessing || isListening}
+            >
+              {isProcessing
+                ? "Understanding..."
+                : "Understand Command"}
+            </button>
+          </div>
+        )}
+
+        {commandResult && (
+          <div className="command-result">
+            <strong>Dukaan AI understood:</strong>
+
+            <p>{commandResult.message}</p>
+
+            {commandResult.intent && (
+              <p>
+                <strong>Intent:</strong> {commandResult.intent}
+              </p>
+            )}
+
+            {commandResult.customer && (
+              <p>
+                <strong>Customer:</strong> {commandResult.customer}
+              </p>
+            )}
+
+            {commandResult.amount !== null &&
+              commandResult.amount !== undefined && (
+                <p>
+                  <strong>Amount:</strong> ₹{commandResult.amount}
+                </p>
+              )}
+
+            <p>
+              <strong>Status:</strong> {commandResult.status}
+            </p>
           </div>
         )}
 
