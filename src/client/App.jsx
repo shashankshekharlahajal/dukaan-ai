@@ -1,5 +1,56 @@
+
+import { useRef, useState } from "react";
 import "./styles/main.css";
+import { createSpeechRecognition } from "./services/speechRecognition.js";
+
 export default function App() {
+  const recognitionRef = useRef(null);
+
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [error, setError] = useState("");
+
+  function handleVoiceInput() {
+    setError("");
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    setTranscript("");
+
+    const recognition = createSpeechRecognition({
+      onStart: () => {
+        setIsListening(true);
+        setError("");
+      },
+
+      onResult: (text) => {
+        setTranscript(text);
+      },
+
+      onError: (message) => {
+        setError(`Voice error: ${message}`);
+      },
+
+      onEnd: () => {
+        setIsListening(false);
+      }
+    });
+
+    if (!recognition) return;
+
+    recognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+    } catch (error) {
+      setIsListening(false);
+      setError("Microphone could not start. Please try again.");
+    }
+  }
+
   return (
     <main className="app">
       <header className="app-header">
@@ -32,15 +83,36 @@ export default function App() {
           <span>🎙️</span>
         </div>
 
-        <h2>Talk to Dukaan AI</h2>
+        <h2>
+          {isListening ? "Sun raha hoon..." : "Talk to Dukaan AI"}
+        </h2>
 
         <p>
-          Apni baat boliye. Main aapki madad karunga.
+          {isListening
+            ? "Apni baat boliye. Main sun raha hoon."
+            : "Apni baat boliye. Main aapki madad karunga."}
         </p>
 
-        <button className="voice-button" type="button" disabled>
-          Voice assistant coming soon
+        <button
+          className="voice-button"
+          type="button"
+          onClick={handleVoiceInput}
+        >
+          {isListening ? "Stop Listening" : "Start Speaking"}
         </button>
+
+        {transcript && (
+          <div className="transcript-box">
+            <strong>Your words:</strong>
+            <p>{transcript}</p>
+          </div>
+        )}
+
+        {error && (
+          <p className="voice-error" role="alert">
+            {error}
+          </p>
+        )}
       </section>
 
       <section className="features-section">
