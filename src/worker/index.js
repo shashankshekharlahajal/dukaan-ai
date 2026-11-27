@@ -1,10 +1,10 @@
 
 import { Hono } from "hono";
 import { understandCommand } from "./services/command-understanding.js";
+import { understandWithAI } from "./services/ai-understanding.js";
 
 const app = new Hono();
 
-// API health check
 app.get("/api/health", (c) => {
   return c.json({
     success: true,
@@ -14,7 +14,6 @@ app.get("/api/health", (c) => {
   });
 });
 
-// Basic API information
 app.get("/api", (c) => {
   return c.json({
     name: "Dukaan AI",
@@ -23,7 +22,7 @@ app.get("/api", (c) => {
   });
 });
 
-// Understand a shopkeeper's command
+// AI command understanding
 app.post("/api/command", async (c) => {
   try {
     const body = await c.req.json();
@@ -51,10 +50,56 @@ app.post("/api/command", async (c) => {
       );
     }
 
-    const result = understandCommand(body.text);
+    if (!c.env?.AI) {
+      return c.json(
+        {
+          success: false,
+          message: "AI service is not configured."
+        },
+        503
+      );
+    }
+
+    const result = await understandWithAI(
+      c.env.AI,
+      body.text
+    );
 
     return c.json(result);
   } catch (error) {
+    console.error("Command understanding error:", error);
+
+    return c.json(
+      {
+        success: false,
+        message: "Dukaan AI could not understand this command. Please try again."
+      },
+      500
+    );
+  }
+});
+
+// Basic rule-based service remains available separately
+app.post("/api/command/basic", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (
+      typeof body.text !== "string" ||
+      !body.text.trim() ||
+      body.text.length > 1000
+    ) {
+      return c.json(
+        {
+          success: false,
+          message: "Please provide a valid command."
+        },
+        400
+      );
+    }
+
+    return c.json(understandCommand(body.text));
+  } catch {
     return c.json(
       {
         success: false,
