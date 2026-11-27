@@ -10,19 +10,17 @@ app.get("/api/health", (c) => {
     success: true,
     app: "Dukaan AI",
     status: "running",
-    message: "Dukaan AI API is ready."
+    aiBindingConfigured: Boolean(c.env?.AI)
   });
 });
 
 app.get("/api", (c) => {
   return c.json({
     name: "Dukaan AI",
-    description:
-      "Voice-first business assistant for Indian shopkeepers."
+    status: "running"
   });
 });
 
-// AI command understanding
 app.post("/api/command", async (c) => {
   try {
     const body = await c.req.json();
@@ -31,33 +29,24 @@ app.post("/api/command", async (c) => {
       typeof body.text !== "string" ||
       !body.text.trim()
     ) {
-      return c.json(
-        {
-          success: false,
-          message: "Please provide a valid command."
-        },
-        400
-      );
+      return c.json({
+        success: false,
+        message: "Please provide a valid command."
+      }, 400);
     }
 
     if (body.text.length > 1000) {
-      return c.json(
-        {
-          success: false,
-          message: "Command is too long."
-        },
-        400
-      );
+      return c.json({
+        success: false,
+        message: "Command is too long."
+      }, 400);
     }
 
     if (!c.env?.AI) {
-      return c.json(
-        {
-          success: false,
-          message: "AI service is not configured."
-        },
-        503
-      );
+      return c.json({
+        success: false,
+        message: "Workers AI binding is missing. Check wrangler.jsonc."
+      }, 503);
     }
 
     const result = await understandWithAI(
@@ -67,19 +56,16 @@ app.post("/api/command", async (c) => {
 
     return c.json(result);
   } catch (error) {
-    console.error("Command understanding error:", error);
+    console.error("DUKAAN AI ERROR:", error);
 
-    return c.json(
-      {
-        success: false,
-        message: "Dukaan AI could not understand this command. Please try again."
-      },
-      500
-    );
+    return c.json({
+      success: false,
+      message: error?.message || "Unknown server error.",
+      errorType: error?.name || "Error"
+    }, 500);
   }
 });
 
-// Basic rule-based service remains available separately
 app.post("/api/command/basic", async (c) => {
   try {
     const body = await c.req.json();
@@ -89,24 +75,20 @@ app.post("/api/command/basic", async (c) => {
       !body.text.trim() ||
       body.text.length > 1000
     ) {
-      return c.json(
-        {
-          success: false,
-          message: "Please provide a valid command."
-        },
-        400
-      );
+      return c.json({
+        success: false,
+        message: "Please provide a valid command."
+      }, 400);
     }
 
     return c.json(understandCommand(body.text));
-  } catch {
-    return c.json(
-      {
-        success: false,
-        message: "Unable to process this command."
-      },
-      400
-    );
+  } catch (error) {
+    console.error("BASIC COMMAND ERROR:", error);
+
+    return c.json({
+      success: false,
+      message: error?.message || "Unable to process command."
+    }, 500);
   }
 });
 
