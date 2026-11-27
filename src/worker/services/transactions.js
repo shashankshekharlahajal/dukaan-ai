@@ -5,11 +5,19 @@ export async function recordTransaction(db, data) {
     amount,
     intent,
     originalCommand,
-    requestId
+    requestId,
+    ownerId
   } = data;
 
   if (!db) {
     throw new Error("Database connection is unavailable.");
+  }
+
+  if (
+    typeof ownerId !== "string" ||
+    !ownerId.trim()
+  ) {
+    throw new Error("Authenticated account is required.");
   }
 
   const name = String(customer || "").trim();
@@ -20,7 +28,7 @@ export async function recordTransaction(db, data) {
   }
 
   if (
-    !Number.isSafeInteger(value) ||
+    !Number.isFinite(value) ||
     value <= 0 ||
     value > 10000000
   ) {
@@ -41,55 +49,84 @@ export async function recordTransaction(db, data) {
 
   const amountPaise = Math.round(value * 100);
 
+  if (!Number.isSafeInteger(amountPaise) || amountPaise <= 0) {
+    throw new Error("Please provide a valid amount.");
+  }
+
   const balanceChange =
     intent === "add_credit"
       ? amountPaise
       : -amountPaise;
 
   const statements = [
+    // Create a customer only when adding new credit.
     db.prepare(`
-      INSERT OR IGNORE INTO customers (name)
-      VALUES (?)
-    `).bind(name),
-
-    db.prepare(`
-      UPDATE customers
-      SET balance_paise = balance_paise + ?
-      WHERE name = ? COLLATE NOCASE
-      AND (
-        ? = 'add_credit'
-        OR balance_paise >= ?
+      INSERT OR IGNORE INTO customers (
+        name,
+        owner_id
       )
+      SELECT ?, ?
+      WHERE ? = 'add_credit'
     `).bind(
-      balanceChange,
       name,
-      intent,
-      amountPaise
+      ownerId,
+      intent
     ),
 
+    // Insert the transaction only for this account's customer.
+    // A repayment is accepted only when sufficient balance exists.
     db.prepare(`
       INSERT INTO transactions (
         customer_id,
         type,
         amount_paise,
         original_command,
-        idempotency_key
+        idempotency_key,
+        owner_id
       )
       SELECT
         id,
         ?,
         ?,
         ?,
+        ?,
         ?
       FROM customers
-      WHERE name = ? COLLATE NOCASE
-      AND changes() > 0
+      WHERE owner_id = ?
+      AND name = ? COLLATE NOCASE
+      AND (
+        ? = 'add_credit'
+        OR balance_paise >= ?
+      )
+      LIMIT 1
     `).bind(
       intent,
       amountPaise,
       String(originalCommand || "").slice(0, 1000),
       requestId,
-      name
+      ownerId,
+      ownerId,
+      name,
+      intent,
+      amountPaise
+    ),
+
+    // Update only the customer linked to this transaction.
+    db.prepare(`
+      UPDATE customers
+      SET balance_paise = balance_paise + ?
+      WHERE owner_id = ?
+      AND id = (
+        SELECT customer_id
+        FROM transactions
+        WHERE idempotency_key = ?
+        AND owner_id = ?
+      )
+    `).bind(
+      balanceChange,
+      ownerId,
+      requestId,
+      ownerId
     )
   ];
 
@@ -98,29 +135,37 @@ export async function recordTransaction(db, data) {
   try {
     results = await db.batch(statements);
   } catch (error) {
+    const errorMessage =
+      String(error?.message || "").toLowerCase();
+
     if (
-      error.message?.toLowerCase().includes("unique")
+      errorMessage.includes("unique") ||
+      errorMessage.includes("constraint")
     ) {
-      throw new Error("This transaction has already been recorded.");
+      throw new Error(
+        "This transaction has already been recorded."
+      );
     }
 
     throw error;
   }
 
-  const balanceUpdated =
+  const transactionSaved =
     Number(results[1]?.meta?.changes || 0);
 
-  const transactionSaved =
+  const balanceUpdated =
     Number(results[2]?.meta?.changes || 0);
 
-  if (!balanceUpdated || !transactionSaved) {
+  if (!transactionSaved || !balanceUpdated) {
     if (intent === "record_payment") {
       throw new Error(
         "Customer ka outstanding balance is payment ke liye kam hai."
       );
     }
 
-    throw new Error("Transaction could not be recorded.");
+    throw new Error(
+      "Transaction could not be recorded."
+    );
   }
 
   const savedCustomer = await db.prepare(`
@@ -129,8 +174,16 @@ export async function recordTransaction(db, data) {
       name,
       balance_paise
     FROM customers
-    WHERE name = ? COLLATE NOCASE
-  `).bind(name).first();
+    WHERE owner_id = ?
+    AND name = ? COLLATE NOCASE
+  `).bind(
+    ownerId,
+    name
+  ).first();
+
+  if (!savedCustomer) {
+    throw new Error("Customer could not be found.");
+  }
 
   return {
     success: true,
@@ -138,6 +191,6 @@ export async function recordTransaction(db, data) {
     customerId: savedCustomer.id,
     balance: savedCustomer.balance_paise / 100,
     transactionType: intent,
-    amount: value
+    amount: amountPaise / 100
   };
 }
