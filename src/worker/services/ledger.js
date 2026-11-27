@@ -1,7 +1,7 @@
 
-export async function getCustomers(db) {
-  if (!db) {
-    throw new Error("Database connection is unavailable.");
+export async function getCustomers(db, ownerId) {
+  if (!db || !ownerId) {
+    throw new Error("Database or account is unavailable.");
   }
 
   const result = await db.prepare(`
@@ -11,8 +11,9 @@ export async function getCustomers(db) {
       balance_paise,
       created_at
     FROM customers
+    WHERE owner_id = ?
     ORDER BY name COLLATE NOCASE ASC
-  `).all();
+  `).bind(ownerId).all();
 
   return {
     success: true,
@@ -25,9 +26,9 @@ export async function getCustomers(db) {
   };
 }
 
-export async function getCustomerLedger(db, customerId) {
-  if (!db) {
-    throw new Error("Database connection is unavailable.");
+export async function getCustomerLedger(db, customerId, ownerId) {
+  if (!db || !ownerId) {
+    throw new Error("Database or account is unavailable.");
   }
 
   const id = Number(customerId);
@@ -36,6 +37,7 @@ export async function getCustomerLedger(db, customerId) {
     throw new Error("Invalid customer ID.");
   }
 
+  // Customer must belong to the logged-in account.
   const customer = await db.prepare(`
     SELECT
       id,
@@ -44,7 +46,8 @@ export async function getCustomerLedger(db, customerId) {
       created_at
     FROM customers
     WHERE id = ?
-  `).bind(id).first();
+    AND owner_id = ?
+  `).bind(id, ownerId).first();
 
   if (!customer) {
     return null;
@@ -59,9 +62,10 @@ export async function getCustomerLedger(db, customerId) {
       created_at
     FROM transactions
     WHERE customer_id = ?
+    AND owner_id = ?
     ORDER BY id DESC
     LIMIT 100
-  `).bind(id).all();
+  `).bind(id, ownerId).all();
 
   return {
     success: true,
