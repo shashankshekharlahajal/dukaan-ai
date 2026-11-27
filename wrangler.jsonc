@@ -1,0 +1,13 @@
+
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "dukaan-ai",
+  "main": "./src/worker/index.js",
+  "compatibility_date": "2026-11-27",
+  "assets": {
+    "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
