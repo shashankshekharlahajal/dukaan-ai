@@ -8,21 +8,56 @@ export default function App() {
   const recognitionRef = useRef(null);
 
   const [isListening, setIsListening] = useState(false);
+  const [listeningFor, setListeningFor] = useState("command");
+
   const [transcript, setTranscript] = useState("");
+  const [correction, setCorrection] = useState("");
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [commandResult, setCommandResult] = useState(null);
+  const [isConfirmed, setIsConfirmed] = useState(false);
+
   const [error, setError] = useState("");
 
-  function handleVoiceInput() {
+  function speakResponse(message) {
+    if (
+      !message ||
+      typeof window === "undefined" ||
+      !window.speechSynthesis
+    ) {
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const speech = new SpeechSynthesisUtterance(message);
+    speech.lang = "hi-IN";
+    speech.rate = 0.95;
+    speech.pitch = 1;
+
+    window.speechSynthesis.speak(speech);
+  }
+
+  function startListening(target = "command") {
     setError("");
-    setCommandResult(null);
 
     if (isListening) {
       recognitionRef.current?.stop();
       return;
     }
 
-    setTranscript("");
+    if (target === "command") {
+      setTranscript("");
+      setCommandResult(null);
+      setCorrection("");
+      setIsConfirmed(false);
+    }
+
+    if (target === "correction") {
+      setCorrection("");
+    }
+
+    setListeningFor(target);
 
     const recognition = createSpeechRecognition({
       onStart: () => {
@@ -30,7 +65,11 @@ export default function App() {
       },
 
       onResult: (text) => {
-        setTranscript(text);
+        if (target === "correction") {
+          setCorrection(text);
+        } else {
+          setTranscript(text);
+        }
       },
 
       onError: (message) => {
@@ -54,19 +93,28 @@ export default function App() {
     }
   }
 
-  async function handleUnderstandCommand() {
-    if (!transcript.trim()) {
+  async function processCommand(text) {
+    if (!text.trim()) {
       setError("Please speak or enter a command first.");
       return;
     }
 
     setIsProcessing(true);
     setError("");
-    setCommandResult(null);
+    setIsConfirmed(false);
 
     try {
-      const result = await understandShopkeeperCommand(transcript);
+      const result = await understandShopkeeperCommand(text);
+
       setCommandResult(result);
+
+      const responseMessage =
+        result.message ||
+        result.clarification ||
+        result.understanding ||
+        "Maine aapka command process kar liya hai. Kripya details check karein.";
+
+      speakResponse(responseMessage);
     } catch (err) {
       setError(err.message || "Unable to process your command.");
     } finally {
@@ -74,16 +122,60 @@ export default function App() {
     }
   }
 
-  function handleTranscriptChange(event) {
-    setTranscript(event.target.value);
+  async function handleUnderstandCommand() {
     setCommandResult(null);
-    setError("");
+    setCorrection("");
+    setIsConfirmed(false);
+
+    await processCommand(transcript);
+  }
+
+  async function handleCorrection() {
+    if (!correction.trim()) {
+      setError("Please tell me what needs to be corrected.");
+      return;
+    }
+
+    const correctedCommand = `
+Original shopkeeper command:
+${transcript}
+
+Shopkeeper's correction:
+${correction}
+
+Please understand the original command again using the correction.
+Use the corrected information instead of the incorrect information.
+Do not invent any details.
+Return the updated understanding in the required JSON format.
+`;
+
+    const previousTranscript = transcript;
+
+    await processCommand(correctedCommand);
+
+    setTranscript(previousTranscript);
+    setCorrection("");
   }
 
   function handleNewCommand() {
     setTranscript("");
+    setCorrection("");
     setCommandResult(null);
     setError("");
+    setIsConfirmed(false);
+
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }
+
+  function handleConfirm() {
+    setIsConfirmed(true);
+
+    const message =
+      "Aapki details confirm ho gayi hain. Transaction saving abhi available nahi hai.";
+
+    speakResponse(message);
   }
 
   return (
@@ -100,87 +192,97 @@ export default function App() {
       </header>
 
       <section className="welcome-section">
-        <p className="eyebrow">YOUR BUSINESS ASSISTANT</p>
+        <p className="eyebrow">VOICE-FIRST BUSINESS ASSISTANT</p>
 
         <h1>
           Namaste! 👋
           <br />
-          Aaj dukaan kaise chal rahi hai?
+          Bataiye, aaj dukaan mein kya hua?
         </h1>
 
         <p className="welcome-description">
-          Apni dukaan ka hisaab-kitab bas bolkar manage karein.
+          Aap bolkar ya likhkar apni dukaan ka hisaab
+          manage kar sakte hain. Main aapki baat samajhne
+          aur details check karne mein madad karunga.
         </p>
       </section>
 
       <section className="voice-section">
-        <div className="voice-circle">
-          <span>🎙️</span>
+        <div className={`voice-circle ${isListening ? "listening" : ""}`}>
+          <span>{isListening ? "🔊" : "🎙️"}</span>
         </div>
 
         <h2>
-          {isListening ? "Sun raha hoon..." : "Talk to Dukaan AI"}
+          {isListening
+            ? listeningFor === "correction"
+              ? "Aapki correction sun raha hoon..."
+              : "Aapki baat sun raha hoon..."
+            : "Talk to Dukaan AI"}
         </h2>
 
         <p>
           {isListening
-            ? "Apni baat boliye. Main sun raha hoon."
-            : "Apni baat boliye. Main aapki madad karunga."}
+            ? "Apni baat poori karein. Main sun raha hoon."
+            : "Mic dabakar boliye ya neeche apna command likhiye."}
         </p>
 
         <button
           className="voice-button"
           type="button"
-          onClick={handleVoiceInput}
+          onClick={() => startListening("command")}
           disabled={isProcessing}
         >
-          {isListening ? "Stop Listening" : "Start Speaking"}
+          {isListening && listeningFor === "command"
+            ? "Stop Listening"
+            : "🎙️ Speak Command"}
         </button>
 
-        {transcript !== "" && (
-          <div className="transcript-box">
-            <div className="review-heading">
-              <strong>Your spoken command</strong>
-              <span className="review-tag">Editable</span>
-            </div>
-
-            <textarea
-              className="transcript-input"
-              value={transcript}
-              onChange={handleTranscriptChange}
-              placeholder="Your spoken words will appear here..."
-              rows={3}
-              disabled={isListening || isProcessing}
-            />
-
-            <p className="edit-hint">
-              Spelling ya words galat hain toh yahan correct karein.
-            </p>
-
-            <button
-              className="understand-button"
-              type="button"
-              onClick={handleUnderstandCommand}
-              disabled={isProcessing || isListening || !transcript.trim()}
-            >
-              {isProcessing
-                ? "Understanding..."
-                : commandResult
-                  ? "Understand Again"
-                  : "Understand Command"}
-            </button>
+        <div className="transcript-box">
+          <div className="review-heading">
+            <strong>Your command</strong>
+            <span className="review-tag">Voice / Text</span>
           </div>
-        )}
+
+          <textarea
+            className="transcript-input"
+            value={transcript}
+            onChange={(event) => {
+              setTranscript(event.target.value);
+              setCommandResult(null);
+              setIsConfirmed(false);
+              setError("");
+            }}
+            placeholder="Example: रमेश ने ₹500 का सामान उधार लिया।"
+            rows={3}
+            disabled={isListening || isProcessing}
+          />
+
+          <button
+            className="understand-button"
+            type="button"
+            onClick={handleUnderstandCommand}
+            disabled={isProcessing || isListening || !transcript.trim()}
+          >
+            {isProcessing ? "AI is thinking..." : "Understand Command"}
+          </button>
+        </div>
 
         {commandResult && (
           <div className="command-result">
             <div className="review-heading">
-              <strong>I understood this</strong>
-              <span className="review-tag">Review required</span>
+              <strong>Dukaan AI understood</strong>
+              <span className="review-tag">
+                {commandResult.status === "ready_for_review"
+                  ? "Review details"
+                  : "Needs attention"}
+              </span>
             </div>
 
             <p className="ai-message">
-              {commandResult.message}
+              {commandResult.message ||
+                commandResult.clarification ||
+                commandResult.understanding ||
+                "Please review the information below."}
             </p>
 
             {commandResult.intent && (
@@ -204,14 +306,92 @@ export default function App() {
               </div>
             )}
 
+            {commandResult.product && (
+              <div className="detail-row">
+                <span>Product</span>
+                <strong>{commandResult.product}</strong>
+              </div>
+            )}
+
+            {commandResult.quantity != null && (
+              <div className="detail-row">
+                <span>Quantity</span>
+                <strong>{commandResult.quantity}</strong>
+              </div>
+            )}
+
             <div className="detail-row">
               <span>Status</span>
               <strong>{commandResult.status}</strong>
             </div>
 
-            <p className="review-notice">
-              Please check these details. No transaction has been saved.
-            </p>
+            {commandResult.status === "ready_for_review" && (
+              <>
+                <p className="review-notice">
+                  Kya maine aapki baat sahi samjhi hai?
+                  Agar koi detail galat hai toh neeche correction karein.
+                </p>
+
+                <div className="correction-box">
+                  <strong>Correct something?</strong>
+
+                  <textarea
+                    className="transcript-input"
+                    value={correction}
+                    onChange={(event) => setCorrection(event.target.value)}
+                    placeholder="Example: Customer ka naam Ramesh nahi, Suresh hai."
+                    rows={3}
+                    disabled={isListening || isProcessing || isConfirmed}
+                  />
+
+                  <button
+                    className="correction-voice-button"
+                    type="button"
+                    onClick={() => startListening("correction")}
+                    disabled={isProcessing || isConfirmed}
+                  >
+                    🎙️ Speak Correction
+                  </button>
+
+                  <button
+                    className="understand-button"
+                    type="button"
+                    onClick={handleCorrection}
+                    disabled={
+                      isProcessing ||
+                      isListening ||
+                      !correction.trim() ||
+                      isConfirmed
+                    }
+                  >
+                    {isProcessing ? "Checking correction..." : "Send Correction"}
+                  </button>
+                </div>
+
+                <button
+                  className="confirm-button"
+                  type="button"
+                  onClick={handleConfirm}
+                  disabled={isProcessing || isConfirmed}
+                >
+                  {isConfirmed ? "Details Confirmed" : "Yes, Confirm Details"}
+                </button>
+              </>
+            )}
+
+            {commandResult.status === "needs_clarification" && (
+              <p className="review-notice">
+                Kripya missing information apne agle command mein batayein.
+                Abhi transaction save nahi hui hai.
+              </p>
+            )}
+
+            {isConfirmed && (
+              <p className="confirmation-notice">
+                Details confirmed. Database saving abhi implement nahi hui hai.
+                Koi transaction save nahi hui.
+              </p>
+            )}
 
             <button
               className="secondary-button"
