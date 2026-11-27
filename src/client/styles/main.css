@@ -321,3 +321,91 @@ button {
   font-weight: 650;
   cursor: pointer;
 }
+
+.voice-circle.listening {
+  background: #d9f3e5;
+  box-shadow: 0 0 0 10px rgba(22, 134, 90, 0.08);
+  animation: listening-pulse 1.5s infinite;
+}
+
+@keyframes listening-pulse {
+  50% {
+    box-shadow: 0 0 0 20px rgba(22, 134, 90, 0.02);
+  }
+}
+
+.command-result {
+  margin-top: 24px;
+  padding: 20px;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+}
+
+.correction-box {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 16px;
+  background: #f7f9f7;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.correction-box > strong {
+  font-size: 14px;
+}
+
+.correction-voice-button,
+.confirm-button {
+  width: 100%;
+  padding: 13px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.correction-voice-button {
+  color: var(--primary-dark);
+  background: #e7f5ed;
+}
+
+.confirm-button {
+  margin-top: 14px;
+  color: white;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.confirm-button:disabled,
+.correction-voice-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.confirmation-notice {
+  margin: 16px 0;
+  padding: 13px;
+  color: var(--primary-dark);
+  background: #e7f5ed;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.transcript-box {
+  display: block;
+}
+
+@media (max-width: 480px) {
+  .voice-section {
+    padding: 28px 14px;
+  }
+
+  .command-result {
+    padding: 16px;
+  }
+}
