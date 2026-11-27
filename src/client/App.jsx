@@ -15,17 +15,54 @@ function createRequestId() {
   return `dukaan-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+async function fetchApi(url) {
+  const response = await fetch(url);
+  const result = await response.json();
+
+  if (!response.ok || result.success === false) {
+    throw new Error(result.message || "Data load nahi ho paaya.");
+  }
+
+  return result;
+}
+
+function formatDate(date) {
+  if (!date) return "";
+
+  const parsed = new Date(date.replace(" ", "T") + "Z");
+
+  if (Number.isNaN(parsed.getTime())) return date;
+
+  return parsed.toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 export default function App() {
   const recognitionRef = useRef(null);
 
   const [phase, setPhase] = useState("ready");
+  const [view, setView] = useState("assistant");
+
   const [commandText, setCommandText] = useState("");
   const [correctionText, setCorrectionText] = useState("");
+
   const [commandResult, setCommandResult] = useState(null);
   const [transactionResult, setTransactionResult] = useState(null);
+
   const [requestId, setRequestId] = useState("");
   const [error, setError] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+
+  const [customers, setCustomers] = useState([]);
+  const [selectedLedger, setSelectedLedger] = useState(null);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [ledgerError, setLedgerError] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
 
   function speak(message) {
     if (!message || !window.speechSynthesis) return;
@@ -37,6 +74,64 @@ export default function App() {
     utterance.rate = 0.95;
 
     window.speechSynthesis.speak(utterance);
+  }
+
+  async function loadCustomers() {
+    setLedgerLoading(true);
+    setLedgerError("");
+    setSelectedLedger(null);
+
+    try {
+      const result = await fetchApi("/api/customers");
+      setCustomers(result.customers || []);
+    } catch (err) {
+      setLedgerError(err.message || "Customers load nahi ho paaye.");
+    } finally {
+      setLedgerLoading(false);
+    }
+  }
+
+  async function openLedger(customerId) {
+    setLedgerLoading(true);
+    setLedgerError("");
+    setSelectedLedger(null);
+
+    try {
+      const result = await fetchApi(
+        `/api/customers/${encodeURIComponent(customerId)}/ledger`
+      );
+
+      setSelectedLedger(result);
+    } catch (err) {
+      setLedgerError(err.message || "Customer ledger load nahi ho paaya.");
+    } finally {
+      setLedgerLoading(false);
+    }
+  }
+
+  function openKhata() {
+    recognitionRef.current?.abort();
+
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
+    setView("customers");
+    setCustomerSearch("");
+    setLedgerError("");
+    loadCustomers();
+  }
+
+  function backToCustomers() {
+    setSelectedLedger(null);
+    setLedgerError("");
+    loadCustomers();
+  }
+
+  function backToAssistant() {
+    setView("assistant");
+    setSelectedLedger(null);
+    setLedgerError("");
   }
 
   async function processCommand(text) {
@@ -70,7 +165,7 @@ export default function App() {
         result.message ||
         result.understanding ||
         result.clarification ||
-        "Maine aapka command samajh liya hai."
+        "Maine aapki baat samajh li hai."
       );
     } catch (err) {
       setError(err.message || "AI se connect nahi ho paaya.");
@@ -139,11 +234,6 @@ Return the same required JSON structure.
   function startListening(target) {
     setError("");
 
-    if (phase === "listening") {
-      recognitionRef.current?.stop();
-      return;
-    }
-
     let spokenText = "";
 
     if (target === "command") {
@@ -156,9 +246,7 @@ Return the same required JSON structure.
     }
 
     const recognition = createSpeechRecognition({
-      onStart: () => {
-        setPhase("listening");
-      },
+      onStart: () => setPhase("listening"),
 
       onResult: (text) => {
         spokenText = text;
@@ -280,14 +368,16 @@ Return the same required JSON structure.
     setIsProcessing(false);
   }
 
-  const isListening = phase === "listening";
-
   const actionLabel =
     commandResult?.intent === "add_credit"
-      ? "Udhaar add karna"
+      ? "Naya udhaar"
       : commandResult?.intent === "record_payment"
-        ? "Payment receive karna"
+        ? "Udhaar payment"
         : "Action";
+
+  const filteredCustomers = customers.filter((customer) =>
+    customer.name.toLowerCase().includes(customerSearch.toLowerCase())
+  );
 
   return (
     <main className="assistant-app">
@@ -297,322 +387,444 @@ Return the same required JSON structure.
           <span>Dukaan AI</span>
         </div>
 
-        <span className="header-status">
-          <span className="status-dot"></span>
-          Assistant
-        </span>
+        <div className="header-actions">
+          <button
+            className="khata-nav-button"
+            type="button"
+            onClick={view === "assistant" ? openKhata : backToAssistant}
+          >
+            {view === "assistant" ? "Khata" : "Assistant"}
+          </button>
+
+          <span className="header-status">
+            <span className="status-dot"></span>
+            {view === "assistant" ? "Assistant" : "Khata"}
+          </span>
+        </div>
       </header>
 
-      <section className="assistant-main">
-        <div className={`ai-orb orb-${phase}`}>
-          <div className="orb-inner">
-            {phase === "listening" ? (
-              <span className="orb-icon">🎙️</span>
-            ) : phase === "thinking" || phase === "saving" ? (
-              <span className="orb-icon">✦</span>
-            ) : phase === "saved" ? (
-              <span className="orb-icon">✓</span>
-            ) : (
-              <span className="orb-icon">✦</span>
-            )}
-          </div>
-        </div>
-
-        <h1>
-          {phase === "ready" && "Namaste! 👋"}
-          {phase === "listening" && "Main sun raha hoon..."}
-          {phase === "thinking" && "Samajh raha hoon..."}
-          {phase === "review" && "Ek baar check kijiye"}
-          {phase === "saving" && "Record save ho raha hai..."}
-          {phase === "saved" && "Transaction saved!"}
-        </h1>
-
-        <p className="assistant-subtitle">
-          {phase === "ready" &&
-            "Bataiye, aaj aapki dukaan mein kya hua?"}
-
-          {phase === "listening" &&
-            "Apni baat poori karein. Main dhyan se sun raha hoon."}
-
-          {phase === "thinking" &&
-            "Aapki baat samajhne ki koshish kar raha hoon."}
-
-          {phase === "review" &&
-            "Maine aapki baat ko is tarah samjha hai."}
-
-          {phase === "saving" &&
-            "Aapka transaction database mein save kar raha hoon."}
-
-          {phase === "saved" &&
-            "Aapka transaction successfully record ho gaya hai."}
-        </p>
-
-        <section className="assistant-popup" key={phase}>
-          {phase === "ready" && (
-            <>
-              <div className="popup-heading">
-                Aapse sunna chahta hoon
-              </div>
-
-              <form onSubmit={handleTextCommand}>
-                <textarea
-                  className="compact-input"
-                  value={commandText}
-                  onChange={(event) => setCommandText(event.target.value)}
-                  placeholder="Yahan command likhiye..."
-                  rows={2}
-                />
-
-                <button
-                  className="popup-primary"
-                  type="submit"
-                  disabled={!commandText.trim() || isProcessing}
-                >
-                  Send command
-                  <span>→</span>
-                </button>
-              </form>
-
-              <div className="popup-divider">
-                <span>ya</span>
-              </div>
-
+      {view === "customers" ? (
+        <section className="ledger-main">
+          <div className="ledger-top">
+            {selectedLedger && (
               <button
-                className="popup-mic"
+                className="text-button"
                 type="button"
-                onClick={() => startListening("command")}
+                onClick={backToCustomers}
               >
-                <span>🎙️</span>
-                Bolkar batayein
+                ← Back to customers
               </button>
+            )}
+
+            <h1>
+              {selectedLedger
+                ? selectedLedger.customer.name
+                : "Customer Khata"}
+            </h1>
+
+            <p>
+              {selectedLedger
+                ? "Customer ka udhaar aur payment history."
+                : "Apne customers aur unka baaki balance dekhein."}
+            </p>
+          </div>
+
+          {ledgerError && (
+            <p className="assistant-error" role="alert">
+              {ledgerError}
+            </p>
+          )}
+
+          {ledgerLoading && (
+            <div className="thinking-panel">
+              <div className="thinking-loader"></div>
+              <strong>Khata load ho raha hai...</strong>
+            </div>
+          )}
+
+          {!ledgerLoading && !selectedLedger && (
+            <>
+              <input
+                className="compact-input customer-search"
+                value={customerSearch}
+                onChange={(event) => setCustomerSearch(event.target.value)}
+                placeholder="Customer search karein..."
+              />
+
+              <div className="customer-list">
+                {filteredCustomers.map((customer) => (
+                  <button
+                    className="customer-card"
+                    key={customer.id}
+                    type="button"
+                    onClick={() => openLedger(customer.id)}
+                  >
+                    <div className="customer-avatar">
+                      {customer.name.charAt(0).toUpperCase()}
+                    </div>
+
+                    <div className="customer-info">
+                      <strong>{customer.name}</strong>
+                      <span>Customer #{customer.id}</span>
+                    </div>
+
+                    <div className="customer-balance">
+                      <strong>
+                        ₹{Number(customer.balance).toLocaleString("en-IN")}
+                      </strong>
+                      <span>Baaki</span>
+                    </div>
+                  </button>
+                ))}
+
+                {filteredCustomers.length === 0 && (
+                  <div className="empty-ledger">
+                    {customers.length === 0
+                      ? "Abhi koi customer record nahi hai."
+                      : "Is naam ka customer nahi mila."}
+                  </div>
+                )}
+              </div>
             </>
           )}
 
-          {phase === "listening" && (
-            <div className="listening-panel">
-              <div className="sound-bars">
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
+          {!ledgerLoading && selectedLedger && (
+            <div className="ledger-content">
+              <div className="ledger-balance-card">
+                <span>Current outstanding balance</span>
+                <strong>
+                  ₹{Number(selectedLedger.customer.balance).toLocaleString("en-IN")}
+                </strong>
               </div>
 
-              <strong>
-                {correctionText
-                  ? "Correction sun raha hoon"
-                  : "Aapki baat sun raha hoon"}
-              </strong>
+              <h2>Transaction History</h2>
 
-              <p>
-                {correctionText || commandText || "Boliye..."}
-              </p>
+              <div className="ledger-transactions">
+                {selectedLedger.transactions.map((transaction) => {
+                  const isCredit = transaction.type === "add_credit";
 
-              <button
-                className="popup-secondary"
-                type="button"
-                onClick={() => recognitionRef.current?.stop()}
-              >
-                Stop
-              </button>
-            </div>
-          )}
-
-          {phase === "thinking" && (
-            <div className="thinking-panel">
-              <div className="thinking-loader"></div>
-              <strong>Dukaan AI soch raha hai</strong>
-              <p>Command aur details check ho rahi hain.</p>
-            </div>
-          )}
-
-          {phase === "review" && commandResult && (
-            <>
-              <div className="popup-heading">
-                Maine ye samjha hai
-              </div>
-
-              <p className="understanding-text">
-                {commandResult.message ||
-                  commandResult.understanding ||
-                  commandResult.clarification}
-              </p>
-
-              <div className="review-details">
-                {commandResult.customer && (
-                  <div>
-                    <span>Customer</span>
-                    <strong>{commandResult.customer}</strong>
-                  </div>
-                )}
-
-                {commandResult.amount != null && (
-                  <div>
-                    <span>Amount</span>
-                    <strong>₹{commandResult.amount}</strong>
-                  </div>
-                )}
-
-                {commandResult.intent && (
-                  <div>
-                    <span>Action</span>
-                    <strong>{actionLabel}</strong>
-                  </div>
-                )}
-              </div>
-
-              {commandResult.status === "ready_for_review" ? (
-                <>
-                  <p className="popup-question">
-                    Kya maine sahi samjha?
-                  </p>
-
-                  <div className="popup-actions">
-                    <button
-                      className="popup-primary"
-                      type="button"
-                      onClick={handleConfirm}
-                      disabled={isProcessing}
+                  return (
+                    <article
+                      className="ledger-transaction"
+                      key={transaction.id}
                     >
-                      <span>✓</span> Haan, record karo
-                    </button>
+                      <div className={`transaction-icon ${isCredit ? "credit" : "payment"}`}>
+                        {isCredit ? "↑" : "↓"}
+                      </div>
+
+                      <div className="transaction-info">
+                        <strong>
+                          {isCredit ? "Naya udhaar" : "Payment received"}
+                        </strong>
+
+                        <span>
+                          {formatDate(transaction.createdAt)}
+                        </span>
+
+                        {transaction.originalCommand && (
+                          <small>{transaction.originalCommand}</small>
+                        )}
+                      </div>
+
+                      <strong className={`transaction-amount ${isCredit ? "credit-text" : "payment-text"}`}>
+                        {isCredit ? "+" : "−"}₹
+                        {Number(transaction.amount).toLocaleString("en-IN")}
+                      </strong>
+                    </article>
+                  );
+                })}
+
+                {selectedLedger.transactions.length === 0 && (
+                  <div className="empty-ledger">
+                    Is customer ki transaction history abhi khaali hai.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <p className="privacy-note">
+            Dukaan AI · Customer Khata
+          </p>
+        </section>
+      ) : (
+        <section className="assistant-main">
+          <div className={`ai-orb orb-${phase}`}>
+            <div className="orb-inner">
+              {phase === "listening" ? (
+                <span className="orb-icon">🎙️</span>
+              ) : phase === "thinking" || phase === "saving" ? (
+                <span className="orb-icon">✦</span>
+              ) : phase === "saved" ? (
+                <span className="orb-icon">✓</span>
+              ) : (
+                <span className="orb-icon">✦</span>
+              )}
+            </div>
+          </div>
+
+          <h1>
+            {phase === "ready" && "Namaste! 👋"}
+            {phase === "listening" && "Main sun raha hoon..."}
+            {phase === "thinking" && "Samajh raha hoon..."}
+            {phase === "review" && "Ek baar check kijiye"}
+            {phase === "saving" && "Record save ho raha hai..."}
+            {phase === "saved" && "Transaction saved!"}
+          </h1>
+
+          <p className="assistant-subtitle">
+            {phase === "ready" && "Bataiye, aaj aapki dukaan mein kya hua?"}
+            {phase === "listening" && "Apni baat poori karein. Main dhyan se sun raha hoon."}
+            {phase === "thinking" && "Aapki baat samajhne ki koshish kar raha hoon."}
+            {phase === "review" && "Maine aapki baat ko is tarah samjha hai."}
+            {phase === "saving" && "Aapka transaction database mein save kar raha hoon."}
+            {phase === "saved" && "Aapka transaction successfully record ho gaya hai."}
+          </p>
+
+          <section className="assistant-popup" key={phase}>
+            {phase === "ready" && (
+              <>
+                <div className="popup-heading">
+                  Aapse sunna chahta hoon
+                </div>
+
+                <form onSubmit={handleTextCommand}>
+                  <textarea
+                    className="compact-input"
+                    value={commandText}
+                    onChange={(event) => setCommandText(event.target.value)}
+                    placeholder="Yahan command likhiye..."
+                    rows={2}
+                  />
+
+                  <button
+                    className="popup-primary"
+                    type="submit"
+                    disabled={!commandText.trim() || isProcessing}
+                  >
+                    Send command <span>→</span>
+                  </button>
+                </form>
+
+                <div className="popup-divider">
+                  <span>ya</span>
+                </div>
+
+                <button
+                  className="popup-mic"
+                  type="button"
+                  onClick={() => startListening("command")}
+                >
+                  <span>🎙️</span> Bolkar batayein
+                </button>
+              </>
+            )}
+
+            {phase === "listening" && (
+              <div className="listening-panel">
+                <div className="sound-bars">
+                  {Array.from({ length: 7 }).map((_, index) => (
+                    <span key={index}></span>
+                  ))}
+                </div>
+
+                <strong>
+                  {correctionText ? "Correction sun raha hoon" : "Aapki baat sun raha hoon"}
+                </strong>
+
+                <p>{correctionText || commandText || "Boliye..."}</p>
+
+                <button
+                  className="popup-secondary"
+                  type="button"
+                  onClick={() => recognitionRef.current?.stop()}
+                >
+                  Stop
+                </button>
+              </div>
+            )}
+
+            {phase === "thinking" && (
+              <div className="thinking-panel">
+                <div className="thinking-loader"></div>
+                <strong>Dukaan AI soch raha hai</strong>
+                <p>Command aur details check ho rahi hain.</p>
+              </div>
+            )}
+
+            {phase === "review" && commandResult && (
+              <>
+                <div className="popup-heading">Maine ye samjha hai</div>
+
+                <p className="understanding-text">
+                  {commandResult.message ||
+                    commandResult.understanding ||
+                    commandResult.clarification}
+                </p>
+
+                <div className="review-details">
+                  {commandResult.customer && (
+                    <div>
+                      <span>Customer</span>
+                      <strong>{commandResult.customer}</strong>
+                    </div>
+                  )}
+
+                  {commandResult.amount != null && (
+                    <div>
+                      <span>Amount</span>
+                      <strong>₹{commandResult.amount}</strong>
+                    </div>
+                  )}
+
+                  {commandResult.intent && (
+                    <div>
+                      <span>Action</span>
+                      <strong>{actionLabel}</strong>
+                    </div>
+                  )}
+                </div>
+
+                {commandResult.status === "ready_for_review" ? (
+                  <>
+                    <p className="popup-question">Kya maine sahi samjha?</p>
+
+                    <div className="popup-actions">
+                      <button
+                        className="popup-primary"
+                        type="button"
+                        onClick={handleConfirm}
+                        disabled={isProcessing}
+                      >
+                        ✓ Haan, record karo
+                      </button>
+
+                      <button
+                        className="popup-secondary"
+                        type="button"
+                        onClick={() => {
+                          setCorrectionText("");
+                          setError("");
+                          setPhase("correction");
+                        }}
+                        disabled={isProcessing}
+                      >
+                        Nahi, badalna hai
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="popup-question">
+                      Mujhe thodi aur information chahiye.
+                    </p>
 
                     <button
                       className="popup-secondary"
                       type="button"
-                      onClick={() => {
-                        setCorrectionText("");
-                        setError("");
-                        setPhase("correction");
-                      }}
-                      disabled={isProcessing}
+                      onClick={() => setPhase("correction")}
                     >
-                      Nahi, badalna hai
+                      Jawab dein
                     </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="popup-question">
-                    Mujhe thodi aur information chahiye.
-                  </p>
+                  </>
+                )}
+              </>
+            )}
+
+            {phase === "correction" && (
+              <>
+                <div className="popup-heading">Kya correct karna hai?</div>
+
+                <form onSubmit={handleTextCorrection}>
+                  <textarea
+                    className="compact-input"
+                    value={correctionText}
+                    onChange={(event) => setCorrectionText(event.target.value)}
+                    placeholder="Jaise: Naam Ramesh nahi, Suresh hai."
+                    rows={2}
+                  />
 
                   <button
-                    className="popup-secondary"
-                    type="button"
-                    onClick={() => setPhase("correction")}
+                    className="popup-primary"
+                    type="submit"
+                    disabled={!correctionText.trim() || isProcessing}
                   >
-                    Jawab dein
+                    Send correction <span>→</span>
                   </button>
-                </>
-              )}
-            </>
-          )}
+                </form>
 
-          {phase === "correction" && (
-            <>
-              <div className="popup-heading">
-                Kya correct karna hai?
+                <button
+                  className="popup-mic"
+                  type="button"
+                  onClick={() => startListening("correction")}
+                >
+                  <span>🎙️</span> Bolkar correct karein
+                </button>
+
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => setPhase("review")}
+                >
+                  Wapas jayein
+                </button>
+              </>
+            )}
+
+            {phase === "saving" && (
+              <div className="thinking-panel">
+                <div className="thinking-loader"></div>
+                <strong>Transaction save ho raha hai</strong>
+                <p>Kripya is process ko interrupt na karein.</p>
               </div>
+            )}
 
-              <form onSubmit={handleTextCorrection}>
-                <textarea
-                  className="compact-input"
-                  value={correctionText}
-                  onChange={(event) => setCorrectionText(event.target.value)}
-                  placeholder="Jaise: Naam Ramesh nahi, Suresh hai."
-                  rows={2}
-                />
+            {phase === "saved" && transactionResult && (
+              <div className="confirmed-panel">
+                <div className="confirmed-icon">✓</div>
+
+                <strong>Transaction successfully saved!</strong>
+
+                <p>{transactionResult.customer}</p>
+                <p>Transaction: ₹{transactionResult.amount}</p>
+
+                <p>
+                  {transactionResult.transactionType === "add_credit"
+                    ? "Naya udhaar add hua."
+                    : "Payment receive hua."}
+                </p>
+
+                <div className="review-details">
+                  <div>
+                    <span>Updated outstanding balance</span>
+                    <strong>
+                      ₹{Number(transactionResult.balance).toLocaleString("en-IN")}
+                    </strong>
+                  </div>
+                </div>
 
                 <button
                   className="popup-primary"
-                  type="submit"
-                  disabled={!correctionText.trim() || isProcessing}
+                  type="button"
+                  onClick={handleNewCommand}
                 >
-                  Send correction
-                  <span>→</span>
+                  New command
                 </button>
-              </form>
-
-              <button
-                className="popup-mic"
-                type="button"
-                onClick={() => startListening("correction")}
-              >
-                <span>🎙️</span>
-                Bolkar correct karein
-              </button>
-
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => setPhase("review")}
-              >
-                Wapas jayein
-              </button>
-            </>
-          )}
-
-          {phase === "saving" && (
-            <div className="thinking-panel">
-              <div className="thinking-loader"></div>
-              <strong>Transaction save ho raha hai</strong>
-              <p>Kripya is process ko interrupt na karein.</p>
-            </div>
-          )}
-
-          {phase === "saved" && transactionResult && (
-            <div className="confirmed-panel">
-              <div className="confirmed-icon">✓</div>
-
-              <strong>Transaction successfully saved!</strong>
-
-              <p>
-                {transactionResult.customer}
-              </p>
-
-              <p>
-                Transaction: ₹{transactionResult.amount}
-              </p>
-
-              <p>
-                {transactionResult.transactionType === "add_credit"
-                  ? "Naya udhaar add hua."
-                  : "Payment receive hua."}
-              </p>
-
-              <div className="review-details">
-                <div>
-                  <span>Updated outstanding balance</span>
-                  <strong>
-                    ₹{Number(transactionResult.balance).toLocaleString("en-IN")}
-                  </strong>
-                </div>
               </div>
+            )}
+          </section>
 
-              <button
-                className="popup-primary"
-                type="button"
-                onClick={handleNewCommand}
-              >
-                New command
-              </button>
-            </div>
+          {error && (
+            <p className="assistant-error" role="alert">
+              {error}
+            </p>
           )}
-        </section>
 
-        {error && (
-          <p className="assistant-error" role="alert">
-            {error}
+          <p className="privacy-note">
+            Dukaan AI · Your Voice-First Business Assistant
           </p>
-        )}
-
-        <p className="privacy-note">
-          Dukaan AI · Your voice-first business assistant
-        </p>
-      </section>
+        </section>
+      )}
     </main>
   );
 }
