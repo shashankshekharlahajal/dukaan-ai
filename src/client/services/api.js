@@ -1,31 +1,68 @@
 
-export async function understandShopkeeperCommand(text) {
-  const response = await fetch("/api/command", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ text: text.trim() })
-  });
-
+async function readApiResponse(response) {
   const rawText = await response.text();
-
-  console.log("COMMAND HTTP STATUS:", response.status);
-  console.log("COMMAND RAW RESPONSE:", rawText);
 
   let result;
 
   try {
     result = JSON.parse(rawText);
-  } catch (error) {
+  } catch {
     throw new Error(
-      `Response JSON error: ${error.message}. Raw response: ${rawText.slice(0, 500)}`
+      `Server response invalid hai. HTTP ${response.status}`
     );
   }
 
   if (!response.ok || result.success === false) {
-    throw new Error(result.message || "Command API failed.");
+    throw new Error(
+      result.message || `Server error: ${response.status}`
+    );
   }
 
   return result;
+}
+
+// Understand shopkeeper's command using AI.
+export async function understandShopkeeperCommand(text) {
+  if (!text || !text.trim()) {
+    throw new Error("Please enter a command.");
+  }
+
+  const response = await fetch("/api/command", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      text: text.trim()
+    })
+  });
+
+  return readApiResponse(response);
+}
+
+// Save transaction after shopkeeper confirmation.
+export async function confirmTransaction(data) {
+  if (!data) {
+    throw new Error("Transaction details are missing.");
+  }
+
+  const response = await fetch(
+    "/api/transactions/confirm",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        confirmed: true,
+        customer: data.customer,
+        amount: data.amount,
+        intent: data.intent,
+        originalCommand: data.originalCommand,
+        requestId: data.requestId
+      })
+    }
+  );
+
+  return readApiResponse(response);
 }
