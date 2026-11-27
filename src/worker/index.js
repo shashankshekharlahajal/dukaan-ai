@@ -2,6 +2,7 @@
 import { Hono } from "hono";
 import { understandCommand } from "./services/command-understanding.js";
 import { understandWithAI } from "./services/ai-understanding.js";
+import { recordTransaction } from "./services/transactions.js";
 
 const app = new Hono();
 
@@ -10,7 +11,8 @@ app.get("/api/health", (c) => {
     success: true,
     app: "Dukaan AI",
     status: "running",
-    aiBindingConfigured: Boolean(c.env?.AI)
+    aiBindingConfigured: Boolean(c.env?.AI),
+    dbBindingConfigured: Boolean(c.env?.DB)
   });
 });
 
@@ -21,11 +23,13 @@ app.get("/api", (c) => {
   });
 });
 
+// Understand shopkeeper's command using AI.
 app.post("/api/command", async (c) => {
   try {
     const body = await c.req.json();
 
     if (
+      !body ||
       typeof body.text !== "string" ||
       !body.text.trim()
     ) {
@@ -45,7 +49,7 @@ app.post("/api/command", async (c) => {
     if (!c.env?.AI) {
       return c.json({
         success: false,
-        message: "Workers AI binding is missing. Check wrangler.jsonc."
+        message: "AI service is unavailable."
       }, 503);
     }
 
@@ -60,17 +64,92 @@ app.post("/api/command", async (c) => {
 
     return c.json({
       success: false,
-      message: error?.message || "Unknown server error.",
-      errorType: error?.name || "Error"
+      message: "Command samajhne mein dikkat hui. Dobara try karein."
     }, 500);
   }
 });
 
+// Save a transaction only after explicit confirmation.
+app.post("/api/transactions/confirm", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body || body.confirmed !== true) {
+      return c.json({
+        success: false,
+        message: "Transaction save karne se pehle confirmation zaroori hai."
+      }, 400);
+    }
+
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    if (
+      !["add_credit", "record_payment"].includes(body.intent) ||
+      typeof body.customer !== "string" ||
+      !body.customer.trim() ||
+      typeof body.amount !== "number" ||
+      !Number.isFinite(body.amount) ||
+      typeof body.requestId !== "string"
+    ) {
+      return c.json({
+        success: false,
+        message: "Transaction details are invalid."
+      }, 400);
+    }
+
+    const result = await recordTransaction(c.env.DB, {
+      customer: body.customer,
+      amount: body.amount,
+      intent: body.intent,
+      originalCommand: body.originalCommand,
+      requestId: body.requestId
+    });
+
+    return c.json(result);
+  } catch (error) {
+    console.error("TRANSACTION SAVE ERROR:", error);
+
+    const message = error?.message || "";
+
+    if (
+      message.includes("already been recorded") ||
+      message.includes("outstanding balance")
+    ) {
+      return c.json({
+        success: false,
+        message
+      }, 409);
+    }
+
+    if (
+      message.includes("valid") ||
+      message.includes("Unsupported")
+    ) {
+      return c.json({
+        success: false,
+        message
+      }, 400);
+    }
+
+    return c.json({
+      success: false,
+      message: "Transaction save nahi ho paayi. Dobara try karein."
+    }, 500);
+  }
+});
+
+// Basic parser route (kept for testing).
 app.post("/api/command/basic", async (c) => {
   try {
     const body = await c.req.json();
 
     if (
+      !body ||
       typeof body.text !== "string" ||
       !body.text.trim() ||
       body.text.length > 1000
@@ -87,7 +166,7 @@ app.post("/api/command/basic", async (c) => {
 
     return c.json({
       success: false,
-      message: error?.message || "Unable to process command."
+      message: "Unable to process command."
     }, 500);
   }
 });
