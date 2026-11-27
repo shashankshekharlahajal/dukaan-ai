@@ -15,9 +15,9 @@ function extractAmount(text) {
 
 function extractCustomer(text) {
   const patterns = [
-    /([\p{L}]+)\s+ne\b/iu,
-    /([\p{L}]+)\s+ke\s+account/iu,
-    /customer\s+([\p{L}]+)/iu
+    /([\p{L}\p{M}]+)\s+(?:ने|ne)(?=\s|$)/iu,
+    /([\p{L}\p{M}]+)\s+के\s+(?:account|खाते)/iu,
+    /customer\s+([\p{L}\p{M}]+)/iu
   ];
 
   for (const pattern of patterns) {
@@ -42,12 +42,11 @@ export function understandCommand(input) {
     };
   }
 
-  const normalized = text.toLowerCase();
   const amount = extractAmount(text);
   const customer = extractCustomer(text);
 
   const creditWords =
-    /udhaar| उधार |credit|borrowed|baaki|बाकी/i;
+    /udhaar|उधार|credit|borrowed|baaki|बाकी/i;
 
   const paymentWords =
     /payment|paid|de\s+diye|jama|जमा|chuka|चुका/i;
@@ -55,42 +54,19 @@ export function understandCommand(input) {
   const depositWords =
     /deposit|डिपाजिट|डिपॉजिट/i;
 
-  if (depositWords.test(normalized)) {
+  if (depositWords.test(text)) {
     return {
       success: true,
       status: "needs_clarification",
       intent: "unknown_deposit",
       amount,
       customer,
-      message: "Where should this deposit be recorded: a customer's account or the shop's cash/bank account?"
+      message:
+        "Where should this deposit be recorded: a customer's account or the shop's cash/bank account?"
     };
   }
 
-  if (creditWords.test(normalized)) {
-    if (!amount || !customer) {
-      return {
-        success: true,
-        status: "needs_clarification",
-        intent: "add_credit",
-        amount,
-        customer,
-        message: !customer
-          ? "Which customer's credit should I record?"
-          : "What is the customer's name?"
-      };
-    }
-
-    return {
-      success: true,
-      status: "awaiting_confirmation",
-      intent: "add_credit",
-      customer,
-      amount,
-      message: `${customer} ke account mein ₹${amount} ka udhaar add kar doon?`
-    };
-  }
-
-  if (paymentWords.test(normalized)) {
+  if (paymentWords.test(text)) {
     if (!amount || !customer) {
       return {
         success: true,
@@ -114,12 +90,37 @@ export function understandCommand(input) {
     };
   }
 
+  if (creditWords.test(text)) {
+    if (!amount || !customer) {
+      return {
+        success: true,
+        status: "needs_clarification",
+        intent: "add_credit",
+        amount,
+        customer,
+        message: !customer
+          ? "Which customer's credit should I record?"
+          : "What is the customer's name?"
+      };
+    }
+
+    return {
+      success: true,
+      status: "awaiting_confirmation",
+      intent: "add_credit",
+      customer,
+      amount,
+      message: `${customer} ke account mein ₹${amount} ka udhaar add kar doon?`
+    };
+  }
+
   return {
     success: true,
     status: "unsupported",
     intent: null,
     amount,
     customer,
-    message: "Abhi main is command ko samajh nahi paaya. Please dobara batayein."
+    message:
+      "Abhi main is command ko samajh nahi paaya. Please dobara batayein."
   };
 }
