@@ -3,6 +3,10 @@ import { Hono } from "hono";
 import { understandCommand } from "./services/command-understanding.js";
 import { understandWithAI } from "./services/ai-understanding.js";
 import { recordTransaction } from "./services/transactions.js";
+import {
+  getCustomers,
+  getCustomerLedger
+} from "./services/ledger.js";
 
 const app = new Hono();
 
@@ -65,6 +69,62 @@ app.post("/api/command", async (c) => {
     return c.json({
       success: false,
       message: "Command samajhne mein dikkat hui. Dobara try karein."
+    }, 500);
+  }
+});
+
+// Get all customers.
+app.get("/api/customers", async (c) => {
+  try {
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    const result = await getCustomers(c.env.DB);
+
+    return c.json(result);
+  } catch (error) {
+    console.error("CUSTOMER LIST ERROR:", error);
+
+    return c.json({
+      success: false,
+      message: "Customers load nahi ho paaye."
+    }, 500);
+  }
+});
+
+// Get one customer's ledger and transaction history.
+app.get("/api/customers/:id/ledger", async (c) => {
+  try {
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    const result = await getCustomerLedger(
+      c.env.DB,
+      c.req.param("id")
+    );
+
+    if (!result) {
+      return c.json({
+        success: false,
+        message: "Customer nahi mila."
+      }, 404);
+    }
+
+    return c.json(result);
+  } catch (error) {
+    console.error("CUSTOMER LEDGER ERROR:", error);
+
+    return c.json({
+      success: false,
+      message: "Customer ledger load nahi ho paaya."
     }, 500);
   }
 });
