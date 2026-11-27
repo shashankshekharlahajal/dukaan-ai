@@ -1,5 +1,6 @@
 
 import { Hono } from "hono";
+import auth from "./routes/auth.js";
 import { understandCommand } from "./services/command-understanding.js";
 import { understandWithAI } from "./services/ai-understanding.js";
 import { recordTransaction } from "./services/transactions.js";
@@ -9,6 +10,7 @@ import {
 } from "./services/ledger.js";
 
 const app = new Hono();
+app.route("/api/auth", auth);
 
 app.get("/api/health", (c) => {
   return c.json({
