@@ -2,113 +2,104 @@
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
 
 const SYSTEM_PROMPT = `
-You are Dukaan AI, a voice-first business assistant
+You are Dukaan AI, a Hindi and Hinglish voice assistant
 for Indian shopkeepers.
 
-Understand Hindi, Hinglish and Indian regional languages.
+IMPORTANT:
+For now, you support ONLY two operations:
 
-Your task is ONLY to understand the shopkeeper's command.
-Never save or execute a transaction.
+1. add_credit:
+   Add new udhaar to a customer's account.
+   The customer now owes money to the shopkeeper.
 
-Supported intents:
+2. record_payment:
+   Record money received from a customer against
+   their existing udhaar.
+   The customer's outstanding balance decreases.
+
+UNDERSTAND NATURAL LANGUAGE:
+Shopkeepers can use different words and sentence structures.
+Do not require exact keywords or fixed sentences.
+
+EXAMPLES FOR add_credit:
+
+- "Ramesh ne 500 rupaye ka samaan udhaar liya."
+- "Ramesh ne udhaar liya hai."
+- "Ramesh ke khate mein 500 jod do."
+- "Maine Ramesh ko 500 ka udhaar diya."
+- "Ramesh ko 500 rupaye baaki mein de diye."
+- "Ramesh ke naam 500 rupaye likh do."
+- "Ramesh ka naya udhaar 500 rupaye hai."
+
+These mean: add 500 to Ramesh's outstanding balance.
+
+EXAMPLES FOR record_payment:
+
+- "Ramesh ne apne udhaar ke 500 rupaye chuka diye."
+- "Ramesh ne apna 500 rupaye ka baaki de diya."
+- "Ramesh ne 500 rupaye wapas kar diye."
+- "Ramesh ke 500 rupaye mil gaye."
+- "Ramesh ne udhaar chuka diya."
+- "Ramesh ne 500 jama kar diye."
+- "Ramesh ne purane udhaar ka payment kar diya."
+- "Ramesh ne apna hisaab chuka diya."
+
+These mean: subtract the received amount from
+Ramesh's outstanding balance.
+
+IMPORTANT DIFFERENCES:
+
+- "Udhaar liya" means new credit was given.
+- "Udhaar diya" means new credit was given.
+- "Udhaar chuka diya" means payment was received.
+- "Paise wapas kar diye" means payment was received.
+- "Paise mil gaye" means payment was received only
+  when the sentence clearly refers to customer udhaar.
+- Never confuse a new udhaar with repayment.
+- Words such as "jama" must be understood using context.
+
+EXTRACTION RULES:
+
+1. Extract the customer's name.
+2. Extract the amount as a number.
+3. Identify the correct intent.
+4. Never invent a customer name or amount.
+5. If customer or amount is missing, ask for it.
+6. If the sentence is ambiguous, ask a clarification.
+7. Do not assume a payment is a new udhaar.
+8. Do not assume a new udhaar is a payment.
+9. Do not process sales, inventory or other operations.
+10. Never save or execute transactions.
+
+Return ONLY valid JSON in this exact structure:
+
+{
+  "intent": "add_credit",
+  "customer": "Ramesh",
+  "amount": 500,
+  "status": "ready_for_review",
+  "missing_fields": [],
+  "clarification": "",
+  "understanding": "Ramesh ke khate mein 500 rupaye udhaar jodne hain."
+}
+
+Allowed intent values:
 - add_credit
 - record_payment
-- record_sale
-- update_inventory
-- check_balance
 - unknown
 
-Rules:
-1. Extract the customer's name accurately.
-2. Extract the amount as a number.
-3. Understand Hindi and Hinglish speech variations.
-4. "udhaar", "उधार", and "उधर" depend on sentence context.
-5. Never invent customer names, amounts or products.
-6. If information is missing, use null.
-7. If a command is unclear, ask a short clarification.
-8. A deposit does not automatically mean customer credit.
-9. Greetings are not financial transactions.
-10. For add_credit, customer and amount are required.
-11. For record_payment, customer and amount are required.
-12. For record_sale, amount is required.
-13. Return only the requested JSON structure.
+Allowed status values:
+- ready_for_review
+- needs_clarification
+- unsupported
 `;
 
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    intent: {
-      type: "string",
-      enum: [
-        "add_credit",
-        "record_payment",
-        "record_sale",
-        "update_inventory",
-        "check_balance",
-        "unknown"
-      ]
-    },
-    customer: {
-      type: ["string", "null"]
-    },
-    amount: {
-      type: ["number", "null"]
-    },
-    product: {
-      type: ["string", "null"]
-    },
-    quantity: {
-      type: ["number", "null"]
-    },
-    status: {
-      type: "string",
-      enum: [
-        "ready_for_review",
-        "needs_clarification",
-        "unsupported"
-      ]
-    },
-    missing_fields: {
-      type: "array",
-      items: {
-        type: "string"
-      }
-    },
-    clarification: {
-      type: "string"
-    },
-    understanding: {
-      type: "string"
-    }
-  },
-  required: [
-    "intent",
-    "customer",
-    "amount",
-    "product",
-    "quantity",
-    "status",
-    "missing_fields",
-    "clarification",
-    "understanding"
-  ],
-  additionalProperties: false
-};
-
-function extractModelResponse(result) {
+function extractResponse(result) {
   const response =
     result?.response ??
     result?.choices?.[0]?.message?.content;
 
-  if (typeof response === "string") {
-    const cleaned = response
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
-
-    return JSON.parse(cleaned);
-  }
-
+  // Cloudflare JSON Mode can return an object directly.
   if (
     response &&
     typeof response === "object" &&
@@ -117,7 +108,24 @@ function extractModelResponse(result) {
     return response;
   }
 
-  throw new Error("AI returned an empty or invalid response.");
+  if (typeof response !== "string") {
+    throw new Error("AI returned an empty response.");
+  }
+
+  let cleaned = response
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  // Recover JSON if the model adds text around it.
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+  }
+
+  return JSON.parse(cleaned);
 }
 
 export async function understandWithAI(ai, input) {
@@ -139,32 +147,24 @@ export async function understandWithAI(ai, input) {
       },
       {
         role: "user",
-        content: `Understand this shopkeeper command:\n${text}`
+        content: `Understand this shopkeeper's statement:\n${text}`
       }
     ],
     response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "dukaan_command",
-        strict: true,
-        schema: RESPONSE_SCHEMA
-      }
+      type: "json_object"
     },
     chat_template_kwargs: {
       enable_thinking: false
     },
-    max_completion_tokens: 400,
+    max_tokens: 400,
     temperature: 0
   });
 
-  const parsed = extractModelResponse(result);
+  const parsed = extractResponse(result);
 
   const allowedIntents = [
     "add_credit",
     "record_payment",
-    "record_sale",
-    "update_inventory",
-    "check_balance",
     "unknown"
   ];
 
@@ -188,59 +188,52 @@ export async function understandWithAI(ai, input) {
       ? parsed.customer.trim()
       : null;
 
+  const rawAmount = parsed.amount;
+
   const amount =
-    typeof parsed.amount === "number" &&
-    Number.isFinite(parsed.amount) &&
-    parsed.amount > 0
-      ? parsed.amount
+    typeof rawAmount === "number"
+      ? rawAmount
+      : typeof rawAmount === "string"
+        ? Number(rawAmount.replace(/,/g, "").replace(/[₹\s]/g, ""))
+        : null;
+
+  const validAmount =
+    Number.isFinite(amount) && amount > 0
+      ? amount
       : null;
 
-  const requiresCustomer = [
-    "add_credit",
-    "record_payment",
-    "check_balance"
-  ].includes(parsed.intent);
+  const missingFields = [];
 
-  const requiresAmount = [
-    "add_credit",
-    "record_payment",
-    "record_sale"
-  ].includes(parsed.intent);
-
-  const missingFields = Array.isArray(parsed.missing_fields)
-    ? parsed.missing_fields.filter(
-        (field) => typeof field === "string"
-      )
-    : [];
-
-  if (requiresCustomer && !customer) {
+  if (
+    ["add_credit", "record_payment"].includes(parsed.intent) &&
+    !customer
+  ) {
     missingFields.push("customer");
   }
 
-  if (requiresAmount && !amount) {
+  if (
+    ["add_credit", "record_payment"].includes(parsed.intent) &&
+    !validAmount
+  ) {
     missingFields.push("amount");
   }
-
-  const uniqueMissingFields = [...new Set(missingFields)];
 
   let status = parsed.status;
 
   if (parsed.intent === "unknown") {
     status = "unsupported";
-  } else if (uniqueMissingFields.length > 0) {
-    status = "needs_clarification";
-  } else if (status === "needs_clarification") {
+  } else if (missingFields.length > 0) {
     status = "needs_clarification";
   }
-
-  const understanding =
-    typeof parsed.understanding === "string"
-      ? parsed.understanding
-      : "";
 
   const clarification =
     typeof parsed.clarification === "string"
       ? parsed.clarification
+      : "";
+
+  const understanding =
+    typeof parsed.understanding === "string"
+      ? parsed.understanding
       : "";
 
   let message = understanding;
@@ -248,38 +241,30 @@ export async function understandWithAI(ai, input) {
   if (status === "needs_clarification") {
     message =
       clarification ||
-      "Mujhe thodi aur information chahiye.";
+      (!customer
+        ? "Kis customer ka udhaar record karna hai?"
+        : "Kitne rupaye record karne hain?");
   }
 
   if (status === "unsupported") {
     message =
       clarification ||
-      "Main is command ko samajh nahi paaya.";
+      "Main abhi sirf udhaar aur udhaar ka payment record kar sakta hoon.";
   }
 
   if (status === "ready_for_review" && !message) {
-    message = "Maine aapka command samajh liya hai.";
+    message = "Maine aapki baat samajh li hai.";
   }
 
   return {
     success: true,
-    message,
     intent: parsed.intent,
     customer,
-    amount,
-    product:
-      typeof parsed.product === "string"
-        ? parsed.product
-        : null,
-    quantity:
-      typeof parsed.quantity === "number" &&
-      Number.isFinite(parsed.quantity) &&
-      parsed.quantity > 0
-        ? parsed.quantity
-        : null,
+    amount: validAmount,
     status,
-    missing_fields: uniqueMissingFields,
+    missing_fields: missingFields,
     clarification,
-    understanding
+    understanding,
+    message
   };
 }
