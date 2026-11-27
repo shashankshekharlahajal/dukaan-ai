@@ -1,5 +1,5 @@
 
-const ITERATIONS = 310000;
+const ITERATIONS = 100000;
 const SESSION_DAYS = 7;
 
 const encoder = new TextEncoder();
