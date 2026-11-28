@@ -10,6 +10,18 @@ import {
   respondToConnectionRequest
 } from "./services/connections.js";
 
+import {
+  createConnectedDebt,
+  respondToDebt,
+  getConnectedDebts
+} from "./services/debts.js";
+
+import {
+  createRepayment,
+  respondToRepayment,
+  getRepayments
+} from "./services/repayments.js";
+
 import { understandCommand } from "./services/command-understanding.js";
 import { understandWithAI } from "./services/ai-understanding.js";
 import { recordTransaction } from "./services/transactions.js";
@@ -131,7 +143,7 @@ app.get("/api/connections", requireAuth, async (c) => {
   }
 });
 
-// Accept or reject an incoming request.
+// Accept or reject an incoming connection request.
 app.post("/api/connections/:id/respond", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -185,6 +197,351 @@ app.post("/api/connections/:id/respond", requireAuth, async (c) => {
     }, 500);
   }
 });
+
+// ==========================================
+// CONNECTED DEBT SYSTEM
+// ==========================================
+
+// Create a new connected debt request.
+// direction: "borrowed" or "lent"
+app.post("/api/debts", requireAuth, async (c) => {
+  try {
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    const body = await c.req.json();
+
+    if (
+      !body ||
+      typeof body.connectionId !== "string" ||
+      !["borrowed", "lent"].includes(body.direction) ||
+      !Number.isSafeInteger(body.amountPaise) ||
+      body.amountPaise <= 0
+    ) {
+      return c.json({
+        success: false,
+        message: "Connection, direction aur valid amount required hain."
+      }, 400);
+    }
+
+    if (
+      body.originalCommand !== undefined &&
+      body.originalCommand !== null &&
+      (
+        typeof body.originalCommand !== "string" ||
+        body.originalCommand.length > 1000
+      )
+    ) {
+      return c.json({
+        success: false,
+        message: "Invalid original command."
+      }, 400);
+    }
+
+    const user = c.get("user");
+
+    const result = await createConnectedDebt(
+      c.env.DB,
+      user.id,
+      body.connectionId,
+      body.direction,
+      body.amountPaise,
+      body.originalCommand || null
+    );
+
+    return c.json(result, 201);
+
+  } catch (error) {
+    console.error("CREATE DEBT ERROR:", error);
+
+    const message = error?.message || "";
+
+    if (
+      message.includes("Invalid") ||
+      message.includes("Valid") ||
+      message.includes("Accepted") ||
+      message.includes("nahi")
+    ) {
+      return c.json({
+        success: false,
+        message
+      }, 400);
+    }
+
+    return c.json({
+      success: false,
+      message: "Udhaar request create nahi ho paayi."
+    }, 500);
+  }
+});
+
+// Get all connected debts for the logged-in user.
+app.get("/api/debts", requireAuth, async (c) => {
+  try {
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    const user = c.get("user");
+
+    const result = await getConnectedDebts(
+      c.env.DB,
+      user.id
+    );
+
+    return c.json(result);
+
+  } catch (error) {
+    console.error("GET DEBTS ERROR:", error);
+
+    return c.json({
+      success: false,
+      message: "Udhaar records load nahi ho paaye."
+    }, 500);
+  }
+});
+
+// Accept or reject a connected debt request.
+app.post("/api/debts/:id/respond", requireAuth, async (c) => {
+  try {
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    const body = await c.req.json();
+
+    if (
+      !body ||
+      !["confirmed", "rejected"].includes(body.decision)
+    ) {
+      return c.json({
+        success: false,
+        message: "Decision must be confirmed or rejected."
+      }, 400);
+    }
+
+    const user = c.get("user");
+
+    const result = await respondToDebt(
+      c.env.DB,
+      c.req.param("id"),
+      user.id,
+      body.decision
+    );
+
+    return c.json(result);
+
+  } catch (error) {
+    console.error("DEBT RESPONSE ERROR:", error);
+
+    const message = error?.message || "";
+
+    if (
+      message.includes("Invalid") ||
+      message.includes("nahi mili") ||
+      message.includes("authorized")
+    ) {
+      return c.json({
+        success: false,
+        message
+      }, 400);
+    }
+
+    return c.json({
+      success: false,
+      message: "Udhaar response save nahi ho paaya."
+    }, 500);
+  }
+});
+
+// ==========================================
+// REPAYMENT SYSTEM
+// ==========================================
+
+// Create a repayment request for one specific debt.
+app.post(
+  "/api/debts/:id/repayments",
+  requireAuth,
+  async (c) => {
+    try {
+      if (!c.env?.DB) {
+        return c.json({
+          success: false,
+          message: "Database connection is unavailable."
+        }, 503);
+      }
+
+      const body = await c.req.json();
+
+      if (
+        !body ||
+        !Number.isSafeInteger(body.amountPaise) ||
+        body.amountPaise <= 0 ||
+        typeof body.requestId !== "string"
+      ) {
+        return c.json({
+          success: false,
+          message: "Valid repayment amount aur request ID required hain."
+        }, 400);
+      }
+
+      if (
+        body.originalCommand !== undefined &&
+        body.originalCommand !== null &&
+        (
+          typeof body.originalCommand !== "string" ||
+          body.originalCommand.length > 1000
+        )
+      ) {
+        return c.json({
+          success: false,
+          message: "Invalid original command."
+        }, 400);
+      }
+
+      const user = c.get("user");
+
+      const result = await createRepayment(
+        c.env.DB,
+        user.id,
+        c.req.param("id"),
+        body.amountPaise,
+        body.requestId,
+        body.originalCommand || null
+      );
+
+      return c.json(result, 201);
+
+    } catch (error) {
+      console.error("CREATE REPAYMENT ERROR:", error);
+
+      const message = error?.message || "";
+
+      if (
+        message.includes("Invalid") ||
+        message.includes("Valid") ||
+        message.includes("available balance") ||
+        message.includes("authorized") ||
+        message.includes("not confirmed") ||
+        message.includes("already used")
+      ) {
+        return c.json({
+          success: false,
+          message
+        }, 400);
+      }
+
+      return c.json({
+        success: false,
+        message: "Repayment request create nahi ho paayi."
+      }, 500);
+    }
+  }
+);
+
+// Get repayment history for one debt.
+app.get(
+  "/api/debts/:id/repayments",
+  requireAuth,
+  async (c) => {
+    try {
+      if (!c.env?.DB) {
+        return c.json({
+          success: false,
+          message: "Database connection is unavailable."
+        }, 503);
+      }
+
+      const user = c.get("user");
+
+      const result = await getRepayments(
+        c.env.DB,
+        user.id,
+        c.req.param("id")
+      );
+
+      return c.json(result);
+
+    } catch (error) {
+      console.error("GET REPAYMENTS ERROR:", error);
+
+      return c.json({
+        success: false,
+        message: "Repayment history load nahi ho paayi."
+      }, 500);
+    }
+  }
+);
+
+// Accept or reject a repayment request.
+app.post(
+  "/api/repayments/:id/respond",
+  requireAuth,
+  async (c) => {
+    try {
+      if (!c.env?.DB) {
+        return c.json({
+          success: false,
+          message: "Database connection is unavailable."
+        }, 503);
+      }
+
+      const body = await c.req.json();
+
+      if (
+        !body ||
+        !["confirmed", "rejected"].includes(body.decision)
+      ) {
+        return c.json({
+          success: false,
+          message: "Decision must be confirmed or rejected."
+        }, 400);
+      }
+
+      const user = c.get("user");
+
+      const result = await respondToRepayment(
+        c.env.DB,
+        c.req.param("id"),
+        user.id,
+        body.decision
+      );
+
+      return c.json(result);
+
+    } catch (error) {
+      console.error("REPAYMENT RESPONSE ERROR:", error);
+
+      const message = error?.message || "";
+
+      if (
+        message.includes("Invalid") ||
+        message.includes("nahi mili") ||
+        message.includes("authorized")
+      ) {
+        return c.json({
+          success: false,
+          message
+        }, 400);
+      }
+
+      return c.json({
+        success: false,
+        message: "Repayment response save nahi ho paaya."
+      }, 500);
+    }
+  }
+);
 
 // ==========================================
 // AI COMMAND UNDERSTANDING
