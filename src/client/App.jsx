@@ -27,7 +27,6 @@ async function fetchApi(url, options = {}) {
   });
 
   const rawText = await response.text();
-
   let result;
 
   try {
@@ -139,7 +138,7 @@ export default function App() {
   const [repaymentsByDebt, setRepaymentsByDebt] = useState({});
   const [repaymentLoadingId, setRepaymentLoadingId] = useState("");
 
-  // Old customer ledger (preserved)
+  // Old customer ledger
   const [customers, setCustomers] = useState([]);
   const [selectedLedger, setSelectedLedger] = useState(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
@@ -154,7 +153,7 @@ export default function App() {
   const [connectionError, setConnectionError] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
 
-  // Check existing login session.
+  // Check existing login session
   useEffect(() => {
     async function checkSession() {
       try {
@@ -176,19 +175,15 @@ export default function App() {
     checkSession();
   }, []);
 
-  // Load the data needed by the current page.
+  // Load data for current page
   useEffect(() => {
     if (authStatus !== "user") return;
 
-    if (
-      view === "home" ||
-      view === "borrowed" ||
-      view === "lent"
-    ) {
+    if (["home", "borrowed", "lent"].includes(view)) {
       loadDebts();
     }
 
-    if (view === "connections" || view === "assistant") {
+    if (["connections", "assistant"].includes(view)) {
       loadConnections();
     }
   }, [view, authStatus]);
@@ -415,6 +410,7 @@ export default function App() {
       setConnectionMessage(
         result.message || "Connection request send ho gayi."
       );
+
       setConnectionEmail("");
       await loadConnections();
     } catch (err) {
@@ -440,9 +436,9 @@ export default function App() {
 
       setConnectionMessage(
         result.message ||
-        (decision === "accepted"
-          ? "Connection accept ho gaya."
-          : "Connection reject ho gaya.")
+          (decision === "accepted"
+            ? "Connection accept ho gaya."
+            : "Connection reject ho gaya.")
       );
 
       await loadConnections();
@@ -577,13 +573,19 @@ export default function App() {
           : ""
       );
 
-      setPhase("review");
+      // Clarification and review are separate states
+      setPhase(
+        result.status === "ready_for_review"
+          ? "review"
+          : "clarification"
+      );
 
       speak(
-        result.message ||
-        result.understanding ||
-        result.clarification ||
-        "Maine aapki baat samajh li hai."
+        result.status === "ready_for_review"
+          ? result.understanding || result.message || "Details check karein."
+          : result.clarification ||
+              result.message ||
+              "Mujhe thodi aur information chahiye."
       );
     } catch (err) {
       setError(err.message || "AI se connect nahi ho paaya.");
@@ -633,17 +635,22 @@ Return the same required JSON structure.
           : ""
       );
 
-      setPhase("review");
+      setPhase(
+        result.status === "ready_for_review"
+          ? "review"
+          : "clarification"
+      );
 
       speak(
-        result.message ||
-        result.understanding ||
-        result.clarification ||
-        "Maine aapki correction samajh li hai."
+        result.status === "ready_for_review"
+          ? result.understanding || result.message || "Correction samajh li."
+          : result.clarification ||
+              result.message ||
+              "Mujhe thodi aur information chahiye."
       );
     } catch (err) {
       setError(err.message || "Correction process nahi ho paayi.");
-      setPhase("review");
+      setPhase("correction");
     } finally {
       setIsProcessing(false);
     }
@@ -678,7 +685,7 @@ Return the same required JSON structure.
 
       onError: (message) => {
         setError(`Voice error: ${message}`);
-        setPhase(target === "correction" ? "review" : "ready");
+        setPhase(target === "correction" ? "correction" : "ready");
       },
 
       onEnd: () => {
@@ -689,13 +696,13 @@ Return the same required JSON structure.
             processCommand(spokenText);
           }
         } else {
-          setPhase(target === "correction" ? "review" : "ready");
+          setPhase(target === "correction" ? "correction" : "ready");
         }
       }
     });
 
     if (!recognition) {
-      setPhase(target === "correction" ? "review" : "ready");
+      setPhase(target === "correction" ? "correction" : "ready");
       return;
     }
 
@@ -704,7 +711,7 @@ Return the same required JSON structure.
     try {
       recognition.start();
     } catch {
-      setPhase(target === "correction" ? "review" : "ready");
+      setPhase(target === "correction" ? "correction" : "ready");
       setError("Microphone start nahi ho paaya. Dobara try karein.");
     }
   }
@@ -719,7 +726,7 @@ Return the same required JSON structure.
     processCorrection(correctionText);
   }
 
-  // Match AI counterparty with accepted connections.
+  // Match AI counterparty with accepted connections
   const matchedConnections = acceptedConnections.filter((connection) =>
     personMatches(commandResult?.counterparty, connection.otherUser)
   );
@@ -752,7 +759,7 @@ Return the same required JSON structure.
     return false;
   });
 
-  // Save only after explicit confirmation.
+  // Save only after explicit confirmation
   async function handleConfirm() {
     if (authStatus !== "user") {
       setError("Transaction save karne ke liye login zaroori hai.");
@@ -837,14 +844,12 @@ Return the same required JSON structure.
 
     try {
       const amountPaise = toPaise(amount);
-
       let result;
 
       if (operation === "create_debt") {
-        const connection =
-          acceptedConnections.find(
-            (item) => item.id === selectedConnectionId
-          );
+        const connection = acceptedConnections.find(
+          (item) => item.id === selectedConnectionId
+        );
 
         result = await createConnectedDebt({
           connectionId: connection.id,
@@ -853,9 +858,9 @@ Return the same required JSON structure.
           originalCommand: commandText
         });
       } else {
-        const selectedDebt = matchingDebts.find(
-          (debt) => debt.id === selectedDebtId
-        ) || (matchingDebts.length === 1 ? matchingDebts[0] : null);
+        const selectedDebt =
+          matchingDebts.find((debt) => debt.id === selectedDebtId) ||
+          (matchingDebts.length === 1 ? matchingDebts[0] : null);
 
         if (!selectedDebt) {
           throw new Error("Specific udhaar record select karein.");
@@ -878,7 +883,6 @@ Return the same required JSON structure.
       });
 
       setPhase("saved");
-
       await loadDebts();
 
       speak(
@@ -939,28 +943,24 @@ Return the same required JSON structure.
   function TopBar({ showMenu = false }) {
     return (
       <header className="assistant-header">
-        <div className="brand">
-          <span className="brand-name">Dukaan AI</span>
-        </div>
-
-        {showMenu && (
-          <div className="header-actions">
-            <span className="header-status">
-              <span className="status-dot"></span>
-              {authStatus === "guest" ? "Guest" : "Online"}
+        {showMenu ? (
+          <button
+            className="brand-menu-button"
+            type="button"
+            onClick={() => setMenuOpen((previous) => !previous)}
+            aria-label="Open navigation menu"
+            aria-expanded={menuOpen}
+          >
+            <span className={`menu-toggle ${menuOpen ? "menu-active" : ""}`}>
+              <span></span>
+              <span></span>
             </span>
 
-            <button
-              className={`menu-toggle ${menuOpen ? "menu-active" : ""}`}
-              type="button"
-              onClick={() => setMenuOpen((previous) => !previous)}
-              aria-label="Toggle navigation menu"
-              aria-expanded={menuOpen}
-            >
-              <span></span>
-              <span></span>
-              <span></span>
-            </button>
+            <span className="brand-name">Dukaan AI</span>
+          </button>
+        ) : (
+          <div className="brand">
+            <span className="brand-name">Dukaan AI</span>
           </div>
         )}
       </header>
@@ -976,6 +976,7 @@ Return the same required JSON structure.
         className={`sidebar-link ${view === page ? "active" : ""}`}
         type="button"
         onClick={() => navigateTo(page)}
+        key={page}
       >
         <span className="sidebar-icon">{symbol}</span>
         {label}
@@ -1008,14 +1009,20 @@ Return the same required JSON structure.
           {link("home", "Home", "⌂")}
           {link("borrowed", "Udhaar Liya", "↓")}
           {link("lent", "Udhaar Diya", "↑")}
-          {authStatus === "user" && link("connections", "Connections", "⇄")}
+
+          {authStatus === "user" &&
+            link("connections", "Connections", "⇄")}
+
           {link("assistant", "Voice Assistant", "🎙")}
 
           {authStatus === "user" && (
             <>
               <p className="sidebar-label">OLD RECORDS</p>
+
               <button
-                className={`sidebar-link ${view === "customers" ? "active" : ""}`}
+                className={`sidebar-link ${
+                  view === "customers" ? "active" : ""
+                }`}
                 type="button"
                 onClick={openOldKhata}
               >
@@ -1032,6 +1039,7 @@ Return the same required JSON structure.
                   <span className="account-avatar">
                     {user?.email?.charAt(0).toUpperCase() || "U"}
                   </span>
+
                   <span className="account-email">
                     {user?.email || "Your account"}
                   </span>
@@ -1069,6 +1077,7 @@ Return the same required JSON structure.
     return (
       <main className="assistant-app">
         <TopBar />
+
         <section className="assistant-main">
           <div className="thinking-panel">
             <div className="thinking-loader"></div>
@@ -1085,7 +1094,7 @@ Return the same required JSON structure.
       <main className="assistant-app">
         <TopBar />
 
-        <section className="assistant-main">
+        <section className="assistant-main auth-main">
           <div className="ai-orb orb-ready">
             <div className="orb-inner">
               <span className="orb-icon">✦</span>
@@ -1093,168 +1102,142 @@ Return the same required JSON structure.
           </div>
 
           {authStatus === "choice" ? (
-            <>
-              <h1>Namaste! 👋</h1>
-              <p className="assistant-subtitle">
-                Aapka personal udhaar aur hisaab assistant.
+            <section className="assistant-popup">
+              <div className="popup-heading">
+                Dukaan AI mein aapka swagat hai
+              </div>
+
+              <p className="understanding-text">
+                Apna khata manage karein, udhaar record karein aur
+                doosre users se connect karein.
               </p>
 
-              <section className="assistant-popup">
-                <div className="popup-heading">
-                  Dukaan AI mein aapka swagat hai
-                </div>
-
-                <p className="understanding-text">
-                  Apna khata manage karein, udhaar record karein aur
-                  doosre users se connect karein.
-                </p>
-
-                <div className="popup-actions">
-                  <button
-                    className="popup-primary"
-                    type="button"
-                    onClick={() => openAuth("login")}
-                  >
-                    Login
-                  </button>
-
-                  <button
-                    className="popup-secondary"
-                    type="button"
-                    onClick={() => openAuth("signup")}
-                  >
-                    Create account
-                  </button>
-                </div>
-
-                <div className="popup-divider">
-                  <span>ya</span>
-                </div>
-
+              <div className="popup-actions">
                 <button
-                  className="popup-mic"
+                  className="popup-primary"
                   type="button"
-                  onClick={continueAsGuest}
+                  onClick={() => openAuth("login")}
                 >
-                  Continue as Guest
+                  Login
                 </button>
 
-                <p className="privacy-note">
-                  Guest mode mein AI try kar sakte hain.
-                  Commands database mein save nahi honge.
-                </p>
-              </section>
-            </>
-          ) : (
-            <>
-              <h1>
-                {authMode === "signup"
-                  ? "Create your account"
-                  : "Welcome back"}
-              </h1>
+                <button
+                  className="popup-secondary"
+                  type="button"
+                  onClick={() => openAuth("signup")}
+                >
+                  Create account
+                </button>
+              </div>
 
-              <p className="assistant-subtitle">
-                {authMode === "signup"
-                  ? "Apna Dukaan AI account banayein."
-                  : "Apne account mein login karein."}
+              <div className="popup-divider">
+                <span>ya</span>
+              </div>
+
+              <button
+                className="popup-mic"
+                type="button"
+                onClick={continueAsGuest}
+              >
+                Continue as Guest
+              </button>
+
+              <p className="privacy-note">
+                Guest mode mein commands database mein save nahi honge.
               </p>
+            </section>
+          ) : (
+            <section className="assistant-popup">
+              <div className="popup-heading">
+                {authMode === "signup" ? "Create your account" : "Welcome back"}
+              </div>
 
-              <section className="assistant-popup">
-                <div className="popup-heading">
-                  {authMode === "signup" ? "Sign up" : "Login"}
-                </div>
+              <form onSubmit={handleAuthSubmit}>
+                <input
+                  className="compact-input"
+                  type="email"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                  placeholder="Email address"
+                  autoComplete="email"
+                  required
+                />
 
-                <form onSubmit={handleAuthSubmit}>
-                  <input
-                    className="compact-input"
-                    type="email"
-                    value={authEmail}
-                    onChange={(event) => setAuthEmail(event.target.value)}
-                    placeholder="Email address"
-                    autoComplete="email"
-                    required
-                  />
+                <input
+                  className="compact-input"
+                  type="password"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                  placeholder="Password"
+                  autoComplete={
+                    authMode === "signup" ? "new-password" : "current-password"
+                  }
+                  minLength={8}
+                  maxLength={128}
+                  required
+                />
 
+                {authMode === "signup" && (
                   <input
                     className="compact-input"
                     type="password"
-                    value={authPassword}
-                    onChange={(event) => setAuthPassword(event.target.value)}
-                    placeholder="Password"
-                    autoComplete={
-                      authMode === "signup" ? "new-password" : "current-password"
-                    }
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    placeholder="Confirm password"
+                    autoComplete="new-password"
                     minLength={8}
                     maxLength={128}
                     required
                   />
+                )}
 
-                  {authMode === "signup" && (
-                    <input
-                      className="compact-input"
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(event) => setConfirmPassword(event.target.value)}
-                      placeholder="Confirm password"
-                      autoComplete="new-password"
-                      minLength={8}
-                      maxLength={128}
-                      required
-                    />
-                  )}
-
-                  {authError && (
-                    <p className="assistant-error" role="alert">
-                      {authError}
-                    </p>
-                  )}
-
-                  <button
-                    className="popup-primary"
-                    type="submit"
-                    disabled={authLoading}
-                  >
-                    {authLoading
-                      ? "Please wait..."
-                      : authMode === "signup"
-                        ? "Create account"
-                        : "Login"}
-                  </button>
-                </form>
-
-                <div className="popup-divider">
-                  <span>or</span>
-                </div>
+                {authError && (
+                  <p className="assistant-error" role="alert">
+                    {authError}
+                  </p>
+                )}
 
                 <button
-                  className="text-button"
-                  type="button"
-                  onClick={() =>
-                    openAuth(authMode === "signup" ? "login" : "signup")
-                  }
+                  className="popup-primary"
+                  type="submit"
+                  disabled={authLoading}
                 >
-                  {authMode === "signup"
-                    ? "Already have an account? Login"
-                    : "New to Dukaan? Create account"}
+                  {authLoading
+                    ? "Please wait..."
+                    : authMode === "signup"
+                      ? "Create account"
+                      : "Login"}
                 </button>
+              </form>
 
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => {
-                    setAuthStatus("choice");
-                    setAuthError("");
-                  }}
-                >
-                  ← Back
-                </button>
-              </section>
-            </>
+              <div className="popup-divider">
+                <span>or</span>
+              </div>
+
+              <button
+                className="text-button"
+                type="button"
+                onClick={() =>
+                  openAuth(authMode === "signup" ? "login" : "signup")
+                }
+              >
+                {authMode === "signup"
+                  ? "Already have an account? Login"
+                  : "New to Dukaan? Create account"}
+              </button>
+
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => {
+                  setAuthStatus("choice");
+                  setAuthError("");
+                }}
+              >
+                ← Back
+              </button>
+            </section>
           )}
-
-          <p className="privacy-note">
-            Dukaan AI · Your Personal Khata Assistant
-          </p>
         </section>
       </main>
     );
@@ -1270,6 +1253,7 @@ Return the same required JSON structure.
             <h1>Namaste! 👋</h1>
             <p>Apna udhaar aur hisaab ek jagah manage karein.</p>
           </div>
+
           <div className="dashboard-avatar">
             {user?.email?.charAt(0).toUpperCase() || "G"}
           </div>
@@ -1393,6 +1377,7 @@ Return the same required JSON structure.
             <h2>Aaj ka hisaab bolkar batayein</h2>
             <p>Apni natural language mein baat karein.</p>
           </div>
+
           <button
             className="banner-button"
             type="button"
@@ -1402,9 +1387,7 @@ Return the same required JSON structure.
           </button>
         </section>
 
-        <p className="privacy-note">
-          Logged in as {user?.email}
-        </p>
+        <p className="privacy-note">Logged in as {user?.email}</p>
       </section>
     );
   }
@@ -1443,9 +1426,15 @@ Return the same required JSON structure.
           </p>
         </div>
 
-        <div className={`debt-overview-card ${isBorrowed ? "debt-borrowed" : "debt-lent"}`}>
+        <div
+          className={`debt-overview-card ${
+            isBorrowed ? "debt-borrowed" : "debt-lent"
+          }`}
+        >
           <span>
-            {isBorrowed ? "Total amount you owe" : "Total amount owed to you"}
+            {isBorrowed
+              ? "Total amount you owe"
+              : "Total amount owed to you"}
           </span>
           <strong>₹{formatMoney(total / 100)}</strong>
           <small>Confirmed outstanding balance</small>
@@ -1471,16 +1460,13 @@ Return the same required JSON structure.
                 <h2>Pending requests</h2>
 
                 {pendingDebts.map((debt) => {
-                  const isIncoming =
-                    debt.createdByUserId !== user?.id;
+                  const isIncoming = debt.createdByUserId !== user?.id;
 
                   return (
                     <article className="connection-card" key={debt.id}>
                       <div className="connection-person">
                         <strong>{debt.otherUser}</strong>
-                        <span>
-                          ₹{formatMoney(debt.principalPaise / 100)}
-                        </span>
+                        <span>₹{formatMoney(debt.principalPaise / 100)}</span>
                         <small>
                           {isIncoming
                             ? "Aapki confirmation ka intezaar"
@@ -1532,7 +1518,9 @@ Return the same required JSON structure.
                   </div>
 
                   <h2>
-                    {isBorrowed ? "Koi udhaar nahi liya" : "Koi udhaar nahi diya"}
+                    {isBorrowed
+                      ? "Koi udhaar nahi liya"
+                      : "Koi udhaar nahi diya"}
                   </h2>
 
                   <p>
@@ -1553,22 +1541,21 @@ Return the same required JSON structure.
                   const repayments = repaymentsByDebt[debt.id] || [];
 
                   return (
-                    <article className="connection-card debt-record-card" key={debt.id}>
+                    <article
+                      className="connection-card debt-record-card"
+                      key={debt.id}
+                    >
                       <div className="connection-person">
                         <strong>{debt.otherUser}</strong>
-
                         <span>
                           Original: ₹{formatMoney(debt.principalPaise / 100)}
                         </span>
-
                         <span>
                           Repaid: ₹{formatMoney(debt.repaidPaise / 100)}
                         </span>
-
                         <strong>
                           Baaki: ₹{formatMoney(debt.outstandingPaise / 100)}
                         </strong>
-
                         <small>{formatDate(debt.createdAt)}</small>
                       </div>
 
@@ -1626,7 +1613,8 @@ Return the same required JSON structure.
                                       "Repayment"}
                                   </span>
                                   <small>
-                                    {repayment.status} · {formatDate(repayment.createdAt)}
+                                    {repayment.status} ·{" "}
+                                    {formatDate(repayment.createdAt)}
                                   </small>
                                 </div>
 
@@ -1738,7 +1726,9 @@ Return the same required JSON structure.
               type="submit"
               disabled={connectionLoading}
             >
-              {connectionLoading ? "Please wait..." : "Send connection request"}
+              {connectionLoading
+                ? "Please wait..."
+                : "Send connection request"}
             </button>
           </form>
         </section>
@@ -1748,7 +1738,9 @@ Return the same required JSON structure.
         )}
 
         {connectionMessage && (
-          <p className="connection-success" role="status">{connectionMessage}</p>
+          <p className="connection-success" role="status">
+            {connectionMessage}
+          </p>
         )}
 
         <div className="connection-section">
@@ -1826,9 +1818,7 @@ Return the same required JSON structure.
                   <small>Waiting for acceptance</small>
                 </div>
 
-                <span className="connection-status pending">
-                  Pending
-                </span>
+                <span className="connection-status pending">Pending</span>
               </article>
             ))
           )}
@@ -1856,9 +1846,7 @@ Return the same required JSON structure.
                   <span>Connected {formatDate(item.respondedAt)}</span>
                 </div>
 
-                <span className="connection-status accepted">
-                  Connected
-                </span>
+                <span className="connection-status accepted">Connected</span>
               </article>
             ))
           )}
@@ -1972,7 +1960,11 @@ Return the same required JSON structure.
 
                 return (
                   <article className="ledger-transaction" key={transaction.id}>
-                    <div className={`transaction-icon ${isCredit ? "credit" : "payment"}`}>
+                    <div
+                      className={`transaction-icon ${
+                        isCredit ? "credit" : "payment"
+                      }`}
+                    >
                       {isCredit ? "↑" : "↓"}
                     </div>
 
@@ -1987,7 +1979,11 @@ Return the same required JSON structure.
                       )}
                     </div>
 
-                    <strong className={`transaction-amount ${isCredit ? "credit-text" : "payment-text"}`}>
+                    <strong
+                      className={`transaction-amount ${
+                        isCredit ? "credit-text" : "payment-text"
+                      }`}
+                    >
                       {isCredit ? "+" : "−"}₹{formatMoney(transaction.amount)}
                     </strong>
                   </article>
@@ -2006,109 +2002,89 @@ Return the same required JSON structure.
     );
   }
 
-  // Voice assistant screen
+  // Minimal Voice Assistant
   function AssistantPage() {
     const operation = commandResult?.operation;
     const isDebtCommand = operation === "create_debt";
     const isRepaymentCommand = operation === "record_repayment";
 
-    const needsConnectionChoice =
-      isDebtCommand &&
-      acceptedConnections.length > 0 &&
-      matchedConnections.length !== 1;
+    const needsMoreInfo =
+      phase === "clarification" ||
+      (phase === "review" &&
+        commandResult?.status !== "ready_for_review");
 
-    const needsDebtChoice =
-      isRepaymentCommand && matchingDebts.length > 1;
+    const showReview =
+      (phase === "review" || phase === "clarification") &&
+      commandResult;
 
     return (
-      <section className="assistant-main">
-        <div className={`ai-orb orb-${phase}`}>
-          <div className="orb-inner">
-            {phase === "listening" ? (
-              <span className="orb-icon">🎙️</span>
-            ) : phase === "thinking" || phase === "saving" ? (
-              <span className="orb-icon">✦</span>
-            ) : phase === "saved" ? (
-              <span className="orb-icon">✓</span>
-            ) : (
-              <span className="orb-icon">✦</span>
-            )}
-          </div>
-        </div>
+      <section className="assistant-main assistant-minimal">
+        <div className="assistant-center">
+          <button
+            className="assistant-orb-button"
+            type="button"
+            onClick={() => {
+              if (phase === "ready") {
+                startListening("command");
+              } else if (phase === "listening") {
+                recognitionRef.current?.stop();
+              }
+            }}
+            disabled={
+              !["ready", "listening"].includes(phase)
+            }
+            aria-label="Tap to speak"
+          >
+            <div className={`ai-orb orb-${phase}`}>
+              <div className="orb-inner">
+                <span className="orb-icon">
+                  {phase === "listening"
+                    ? "Ⅱ"
+                    : phase === "thinking" || phase === "saving"
+                      ? "✦"
+                      : phase === "saved"
+                        ? "✓"
+                        : "✦"}
+                </span>
+              </div>
+            </div>
+          </button>
 
-        <h1>
-          {phase === "ready" && "Namaste! 👋"}
-          {phase === "listening" && "Main sun raha hoon..."}
-          {phase === "thinking" && "Samajh raha hoon..."}
-          {phase === "review" && "Ek baar check kijiye"}
-          {phase === "correction" && "Correction"}
-          {phase === "saving" && "Request send ho rahi hai..."}
-          {phase === "saved" && "Request sent!"}
-        </h1>
-
-        <p className="assistant-subtitle">
-          {phase === "ready" && "Bataiye, aaj kya udhaar liya ya diya?"}
-          {phase === "listening" && "Apni baat poori karein. Main sun raha hoon."}
-          {phase === "thinking" && "Aapki baat samajhne ki koshish kar raha hoon."}
-          {phase === "review" && "Maine aapki baat ko is tarah samjha hai."}
-          {phase === "correction" && "Batayein, kya badalna hai."}
-          {phase === "saving" && "Doosre user ko confirmation request bhej rahe hain."}
-          {phase === "saved" && "Request doosre user ko bhej di gayi hai."}
-        </p>
-
-        <section className="assistant-popup" key={phase}>
           {phase === "ready" && (
             <>
-              <div className="popup-heading">Aapse sunna chahta hoon</div>
+              <p className="tap-to-speak">Tap to speak</p>
 
-              <form onSubmit={handleTextCommand}>
-                <textarea
-                  className="compact-input"
+              <form
+                className="minimal-command-form"
+                onSubmit={handleTextCommand}
+              >
+                <input
+                  className="minimal-command-input"
                   value={commandText}
                   onChange={(event) => setCommandText(event.target.value)}
-                  placeholder="Jaise: Maine Ramesh se ₹500 udhaar liya..."
-                  rows={3}
+                  placeholder="Apni baat likhein..."
+                  aria-label="Apni baat likhein"
                 />
 
                 <button
-                  className="popup-primary"
+                  className="minimal-send-button"
                   type="submit"
                   disabled={!commandText.trim() || isProcessing}
+                  aria-label="Send command"
                 >
-                  Send command <span>→</span>
+                  ↑
                 </button>
               </form>
-
-              <div className="popup-divider">
-                <span>ya</span>
-              </div>
-
-              <button
-                className="popup-mic"
-                type="button"
-                onClick={() => startListening("command")}
-              >
-                <span>🎙️</span> Bolkar batayein
-              </button>
             </>
           )}
 
           {phase === "listening" && (
-            <div className="listening-panel">
-              <div className="sound-bars">
-                {Array.from({ length: 7 }).map((_, index) => (
-                  <span key={index}></span>
-                ))}
-              </div>
-
-              <strong>
-                {correctionText ? "Correction sun raha hoon" : "Aapki baat sun raha hoon"}
-              </strong>
-
-              <p>{correctionText || commandText || "Boliye..."}</p>
+            <div className="assistant-state-message">
+              <strong>Main sun raha hoon...</strong>
+              <p>{commandText || "Boliye..."}</p>
 
               <button
-                className="popup-secondary"
+                className="minimal-secondary-button"
                 type="button"
                 onClick={() => recognitionRef.current?.stop()}
               >
@@ -2118,76 +2094,92 @@ Return the same required JSON structure.
           )}
 
           {phase === "thinking" && (
-            <div className="thinking-panel">
+            <div className="assistant-state-message">
               <div className="thinking-loader"></div>
-              <strong>Dukaan AI soch raha hai</strong>
-              <p>Command aur details check ho rahi hain.</p>
+              <strong>Samajh raha hoon...</strong>
             </div>
           )}
 
-          {phase === "review" && commandResult && (
-            <>
-              <div className="popup-heading">Maine ye samjha hai</div>
+          {showReview && (
+            <section className="minimal-review-card">
+              <div className="minimal-card-top">
+                <span className="minimal-card-label">
+                  {needsMoreInfo ? "Need more information" : "Review details"}
+                </span>
 
-              <p className="understanding-text">
-                {commandResult.message ||
-                  commandResult.understanding ||
-                  commandResult.clarification}
-              </p>
-
-              <div className="review-details">
-                {commandResult.counterparty && (
-                  <div>
-                    <span>Person</span>
-                    <strong>{commandResult.counterparty}</strong>
-                  </div>
-                )}
-
-                {commandResult.amount != null && (
-                  <div>
-                    <span>Amount</span>
-                    <strong>₹{formatMoney(commandResult.amount)}</strong>
-                  </div>
-                )}
-
-                {isDebtCommand && (
-                  <div>
-                    <span>Direction</span>
-                    <strong>
-                      {commandResult.direction === "borrowed"
-                        ? "Udhaar Liya"
-                        : commandResult.direction === "lent"
-                          ? "Udhaar Diya"
-                          : "Not clear"}
-                    </strong>
-                  </div>
-                )}
-
-                {isRepaymentCommand && (
-                  <div>
-                    <span>Payment kisne ki?</span>
-                    <strong>
-                      {commandResult.paid_by === "me"
-                        ? "Maine"
-                        : commandResult.paid_by === "other"
-                          ? "Doosre person ne"
-                          : "Not clear"}
-                    </strong>
-                  </div>
-                )}
+                <button
+                  className="minimal-close-button"
+                  type="button"
+                  onClick={handleNewCommand}
+                  aria-label="Close"
+                >
+                  ×
+                </button>
               </div>
 
-              {commandResult.status === "ready_for_review" ? (
+              <p className="minimal-understanding">
+                {needsMoreInfo
+                  ? commandResult.clarification ||
+                    commandResult.message ||
+                    "Mujhe thodi aur information chahiye."
+                  : commandResult.understanding ||
+                    commandResult.message ||
+                    "Ye details check karein."}
+              </p>
+
+              {!needsMoreInfo && (
                 <>
+                  <div className="minimal-review-details">
+                    {commandResult.counterparty && (
+                      <div>
+                        <span>Person</span>
+                        <strong>{commandResult.counterparty}</strong>
+                      </div>
+                    )}
+
+                    {commandResult.amount != null && (
+                      <div>
+                        <span>Amount</span>
+                        <strong>₹{formatMoney(commandResult.amount)}</strong>
+                      </div>
+                    )}
+
+                    {isDebtCommand && (
+                      <div>
+                        <span>Type</span>
+                        <strong>
+                          {commandResult.direction === "borrowed"
+                            ? "Udhaar Liya"
+                            : commandResult.direction === "lent"
+                              ? "Udhaar Diya"
+                              : "Clear nahi hai"}
+                        </strong>
+                      </div>
+                    )}
+
+                    {isRepaymentCommand && (
+                      <div>
+                        <span>Payment kisne ki?</span>
+                        <strong>
+                          {commandResult.paid_by === "me"
+                            ? "Maine"
+                            : commandResult.paid_by === "other"
+                              ? "Doosre person ne"
+                              : "Clear nahi hai"}
+                        </strong>
+                      </div>
+                    )}
+                  </div>
+
                   {isDebtCommand && (
                     <div className="review-selection">
                       <label htmlFor="connection-select">
-                        Connected user select karein
+                        Connected user
                       </label>
 
                       {matchedConnections.length === 1 ? (
                         <p>
-                          Matched: <strong>{matchedConnections[0].otherUser}</strong>
+                          <strong>{matchedConnections[0].otherUser}</strong>
                         </p>
                       ) : acceptedConnections.length > 0 ? (
                         <select
@@ -2200,15 +2192,18 @@ Return the same required JSON structure.
                         >
                           <option value="">Select connected user</option>
                           {acceptedConnections.map((connection) => (
-                            <option value={connection.id} key={connection.id}>
+                            <option
+                              value={connection.id}
+                              key={connection.id}
+                            >
                               {connection.otherUser}
                             </option>
                           ))}
                         </select>
                       ) : (
                         <p>
-                          Abhi koi connected user nahi hai.
-                          Pehle Connections page par connect karein.
+                          Abhi koi connected user nahi hai. Pehle Connections
+                          page par connect karein.
                         </p>
                       )}
                     </div>
@@ -2224,7 +2219,10 @@ Return the same required JSON structure.
                         <p>
                           <strong>
                             {matchingDebts[0].otherUser} · ₹
-                            {formatMoney(matchingDebts[0].outstandingPaise / 100)} baaki
+                            {formatMoney(
+                              matchingDebts[0].outstandingPaise / 100
+                            )}{" "}
+                            baaki
                           </strong>
                         </p>
                       ) : matchingDebts.length > 1 ? (
@@ -2246,20 +2244,58 @@ Return the same required JSON structure.
                         </select>
                       ) : (
                         <p>
-                          Is person ka matching confirmed udhaar record nahi mila.
+                          Is person ka matching confirmed udhaar record nahi
+                          mila.
                         </p>
                       )}
                     </div>
                   )}
+                </>
+              )}
 
+              {needsMoreInfo ? (
+                <>
+                  <form
+                    className="minimal-correction-form"
+                    onSubmit={handleTextCorrection}
+                  >
+                    <input
+                      className="minimal-command-input"
+                      value={correctionText}
+                      onChange={(event) =>
+                        setCorrectionText(event.target.value)
+                      }
+                      placeholder="Apna jawab likhein..."
+                      aria-label="Apna jawab likhein"
+                    />
+
+                    <button
+                      className="minimal-send-button"
+                      type="submit"
+                      disabled={!correctionText.trim() || isProcessing}
+                    >
+                      ↑
+                    </button>
+                  </form>
+
+                  <button
+                    className="minimal-secondary-button"
+                    type="button"
+                    onClick={() => startListening("correction")}
+                  >
+                    🎙️ Bolkar jawab dein
+                  </button>
+                </>
+              ) : (
+                <>
                   <p className="popup-question">
                     {authStatus === "guest"
                       ? "Guest mode mein transaction save nahi hoga."
-                      : "Kya maine sahi samjha?"}
+                      : "Kya ye details sahi hain?"}
                   </p>
 
                   {authStatus === "user" ? (
-                    <div className="popup-actions">
+                    <div className="minimal-review-actions">
                       <button
                         className="popup-primary"
                         type="button"
@@ -2272,7 +2308,7 @@ Return the same required JSON structure.
                             matchingDebts.length === 0)
                         }
                       >
-                        ✓ Haan, confirm karo
+                        Confirm
                       </button>
 
                       <button
@@ -2285,11 +2321,11 @@ Return the same required JSON structure.
                         }}
                         disabled={isProcessing}
                       >
-                        Nahi, badalna hai
+                        Edit
                       </button>
                     </div>
                   ) : (
-                    <div className="popup-actions">
+                    <div className="minimal-review-actions">
                       <button
                         className="popup-primary"
                         type="button"
@@ -2308,35 +2344,31 @@ Return the same required JSON structure.
                     </div>
                   )}
                 </>
-              ) : (
-                <>
-                  <p className="popup-question">
-                    Mujhe thodi aur information chahiye.
-                  </p>
-
-                  <button
-                    className="popup-secondary"
-                    type="button"
-                    onClick={() => setPhase("correction")}
-                  >
-                    Jawab dein
-                  </button>
-                </>
               )}
-            </>
+            </section>
           )}
 
           {phase === "correction" && (
-            <>
-              <div className="popup-heading">Kya correct karna hai?</div>
+            <section className="minimal-review-card">
+              <div className="minimal-card-top">
+                <span className="minimal-card-label">Edit details</span>
+
+                <button
+                  className="minimal-close-button"
+                  type="button"
+                  onClick={() => setPhase("review")}
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
 
               <form onSubmit={handleTextCorrection}>
-                <textarea
-                  className="compact-input"
+                <input
+                  className="minimal-command-input"
                   value={correctionText}
                   onChange={(event) => setCorrectionText(event.target.value)}
-                  placeholder="Jaise: Naam Ramesh nahi, Suresh hai."
-                  rows={3}
+                  placeholder="Kya badalna hai?"
                 />
 
                 <button
@@ -2344,40 +2376,31 @@ Return the same required JSON structure.
                   type="submit"
                   disabled={!correctionText.trim() || isProcessing}
                 >
-                  Send correction <span>→</span>
+                  Apply correction
                 </button>
               </form>
 
               <button
-                className="popup-mic"
+                className="minimal-secondary-button"
                 type="button"
                 onClick={() => startListening("correction")}
               >
-                <span>🎙️</span> Bolkar correct karein
+                🎙️ Bolkar correct karein
               </button>
-
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => setPhase("review")}
-              >
-                Wapas jayein
-              </button>
-            </>
+            </section>
           )}
 
           {phase === "saving" && (
-            <div className="thinking-panel">
+            <div className="assistant-state-message">
               <div className="thinking-loader"></div>
-              <strong>Confirmation request send ho rahi hai</strong>
-              <p>Kripya is process ko interrupt na karein.</p>
+              <strong>Request send ho rahi hai...</strong>
             </div>
           )}
 
           {phase === "saved" && transactionResult && (
-            <div className="confirmed-panel">
+            <section className="minimal-review-card confirmed-panel">
               <div className="confirmed-icon">✓</div>
-              <strong>Request successfully sent!</strong>
+              <strong>Request sent</strong>
 
               <p>{transactionResult.counterparty}</p>
               <p>Amount: ₹{formatMoney(transactionResult.amount)}</p>
@@ -2389,7 +2412,8 @@ Return the same required JSON structure.
               </p>
 
               <p className="privacy-note">
-                Doosre user ke confirm karne ke baad hi ye confirmed balance mein dikhega.
+                Doosre user ke confirm karne ke baad hi ye confirmed balance
+                mein dikhega.
               </p>
 
               <button
@@ -2399,19 +2423,15 @@ Return the same required JSON structure.
               >
                 New command
               </button>
-            </div>
+            </section>
           )}
-        </section>
+        </div>
 
         {error && (
-          <p className="assistant-error" role="alert">{error}</p>
+          <p className="assistant-error minimal-error" role="alert">
+            {error}
+          </p>
         )}
-
-        <p className="privacy-note">
-          {authStatus === "guest"
-            ? "Guest mode · Commands are not saved"
-            : `Logged in as ${user?.email || ""}`}
-        </p>
       </section>
     );
   }
@@ -2424,8 +2444,12 @@ Return the same required JSON structure.
       {view === "home" && <HomePage />}
       {view === "borrowed" && <DebtPage type="borrowed" />}
       {view === "lent" && <DebtPage type="lent" />}
-      {view === "connections" && authStatus === "user" && <ConnectionsPage />}
-      {view === "customers" && authStatus === "user" && <CustomersPage />}
+      {view === "connections" && authStatus === "user" && (
+        <ConnectionsPage />
+      )}
+      {view === "customers" && authStatus === "user" && (
+        <CustomersPage />
+      )}
       {view === "assistant" && <AssistantPage />}
     </main>
   );
