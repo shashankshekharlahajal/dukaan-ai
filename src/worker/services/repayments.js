@@ -3,7 +3,7 @@ function validId(value) {
   return (
     typeof value === "string" &&
     value.trim().length > 0 &&
-    value.length <= 100
+    value.length <= 150
   );
 }
 
@@ -15,13 +15,17 @@ function validAmount(amountPaise) {
 }
 
 // Create a repayment request for one specific connected debt.
+// paidBy:
+// "me"    = logged-in user paid
+// "other" = the other connected user paid
 export async function createRepayment(
   db,
   userId,
   debtId,
   amountPaise,
   idempotencyKey,
-  originalCommand = null
+  originalCommand = null,
+  paidBy = "me"
 ) {
   if (!db || !validId(userId)) {
     throw new Error("Account or database unavailable.");
@@ -35,27 +39,94 @@ export async function createRepayment(
     throw new Error("Valid repayment amount enter karein.");
   }
 
-  if (
-    !validId(idempotencyKey) ||
-    idempotencyKey.length > 150
-  ) {
+  if (!validId(idempotencyKey)) {
     throw new Error("Valid repayment request ID required.");
   }
 
+  if (!["me", "other"].includes(paidBy)) {
+    throw new Error("Payment kisne kiya, ye confirm karein.");
+  }
+
+  // Check that this user belongs to the debt.
+  const debt = await db.prepare(`
+    SELECT
+      d.id,
+      d.lender_user_id,
+      d.borrower_user_id,
+      d.principal_paise,
+      d.status,
+      d.connection_id
+    FROM debts d
+    INNER JOIN connections c
+      ON c.id = d.connection_id
+    WHERE
+      d.id = ?
+      AND d.kind = 'connected'
+      AND d.status = 'confirmed'
+      AND c.status = 'accepted'
+      AND (
+        (
+          c.requester_user_id = d.lender_user_id
+          AND c.recipient_user_id = d.borrower_user_id
+        )
+        OR
+        (
+          c.requester_user_id = d.borrower_user_id
+          AND c.recipient_user_id = d.lender_user_id
+        )
+      )
+      AND (
+        d.lender_user_id = ?
+        OR d.borrower_user_id = ?
+      )
+    LIMIT 1
+  `).bind(debtId, userId, userId).first();
+
+  if (!debt) {
+    throw new Error(
+      "Confirmed connected udhaar record nahi mila."
+    );
+  }
+
+  const otherUserId =
+    debt.lender_user_id === userId
+      ? debt.borrower_user_id
+      : debt.lender_user_id;
+
+  const actualPayerUserId =
+    paidBy === "me"
+      ? userId
+      : otherUserId;
+
+  // Check whether this request ID was already used.
   const existing = await db.prepare(`
-    SELECT id, debt_id, status
+    SELECT
+      id,
+      debt_id,
+      created_by_user_id,
+      payer_user_id,
+      amount_paise,
+      status
     FROM repayments
     WHERE idempotency_key = ?
   `).bind(idempotencyKey).first();
 
   if (existing) {
-    if (existing.debt_id !== debtId) {
-      throw new Error("Request ID already used for another debt.");
+    if (
+      existing.debt_id !== debtId ||
+      existing.created_by_user_id !== userId ||
+      existing.payer_user_id !== actualPayerUserId ||
+      existing.amount_paise !== amountPaise
+    ) {
+      throw new Error(
+        "Request ID already used for a different repayment."
+      );
     }
 
     return {
       success: true,
       repaymentId: existing.id,
+      debtId,
       status: existing.status,
       duplicate: true
     };
@@ -63,8 +134,8 @@ export async function createRepayment(
 
   const repaymentId = crypto.randomUUID();
 
-  // Only the actual payer can create the repayment request.
   // Pending and confirmed repayments reserve the available amount.
+  // The logged-in user reports the payment; the other party confirms it.
   const result = await db.prepare(`
     INSERT INTO repayments (
       id,
@@ -88,14 +159,31 @@ export async function createRepayment(
       ?,
       ?
     FROM debts d
+    INNER JOIN connections c
+      ON c.id = d.connection_id
     WHERE
       d.id = ?
       AND d.kind = 'connected'
       AND d.status = 'confirmed'
+      AND c.status = 'accepted'
+      AND (
+        (
+          c.requester_user_id = d.lender_user_id
+          AND c.recipient_user_id = d.borrower_user_id
+        )
+        OR
+        (
+          c.requester_user_id = d.borrower_user_id
+          AND c.recipient_user_id = d.lender_user_id
+        )
+      )
+      AND (
+        d.lender_user_id = ?
+        OR d.borrower_user_id = ?
+      )
       AND ? IN (d.lender_user_id, d.borrower_user_id)
       AND (
-        SELECT
-          COALESCE(SUM(r.amount_paise), 0)
+        SELECT COALESCE(SUM(r.amount_paise), 0)
         FROM repayments r
         WHERE
           r.debt_id = d.id
@@ -104,18 +192,20 @@ export async function createRepayment(
   `).bind(
     repaymentId,
     userId,
-    userId,
+    actualPayerUserId,
     amountPaise,
     idempotencyKey,
     originalCommand,
     debtId,
     userId,
+    userId,
+    actualPayerUserId,
     amountPaise
   ).run();
 
   if (Number(result.meta?.changes || 0) !== 1) {
     throw new Error(
-      "Repayment create nahi ho payi. Debt confirm nahi hai, amount available balance se zyada hai, ya aap authorized user nahi hain."
+      "Repayment create nahi ho payi. Amount available balance se zyada ho sakta hai."
     );
   }
 
@@ -125,11 +215,12 @@ export async function createRepayment(
     repaymentId,
     debtId,
     amountPaise,
+    paidBy,
     status: "pending"
   };
 }
 
-// The other party must confirm or reject the repayment.
+// Only the other party can confirm or reject the repayment.
 export async function respondToRepayment(
   db,
   repaymentId,
@@ -164,30 +255,47 @@ export async function respondToRepayment(
       AND EXISTS (
         SELECT 1
         FROM debts d
+        INNER JOIN connections c
+          ON c.id = d.connection_id
         WHERE
           d.id = repayments.debt_id
           AND d.kind = 'connected'
           AND d.status = 'confirmed'
+          AND c.status = 'accepted'
           AND (
-            d.lender_user_id = ?
-            OR d.borrower_user_id = ?
+            (
+              c.requester_user_id = d.lender_user_id
+              AND c.recipient_user_id = d.borrower_user_id
+            )
+            OR
+            (
+              c.requester_user_id = d.borrower_user_id
+              AND c.recipient_user_id = d.lender_user_id
+            )
           )
           AND (
-            SELECT
-              COALESCE(SUM(r.amount_paise), 0)
+            d.lender_user_id = userId
+            OR d.borrower_user_id = userId
+          )
+          AND (
+            d.lender_user_id = repayments.created_by_user_id
+            OR d.borrower_user_id = repayments.created_by_user_id
+          )
+          AND (
+            SELECT COALESCE(SUM(r.amount_paise), 0)
             FROM repayments r
             WHERE
               r.debt_id = d.id
               AND r.status = 'confirmed'
               AND r.id != repayments.id
-          ) + CASE
-            WHEN ? = 'confirmed'
-            THEN repayments.amount_paise
-            ELSE 0
-          END
+          )
+          + CASE
+              WHEN ? = 'confirmed'
+              THEN repayments.amount_paise
+              ELSE 0
+            END
           + (
-            SELECT
-              COALESCE(SUM(other.amount_paise), 0)
+            SELECT COALESCE(SUM(other.amount_paise), 0)
             FROM repayments other
             WHERE
               other.debt_id = d.id
@@ -200,8 +308,6 @@ export async function respondToRepayment(
     userId,
     decision,
     repaymentId,
-    userId,
-    userId,
     userId,
     decision
   ).run();
@@ -263,17 +369,14 @@ export async function getRepayments(
       )
 
     ORDER BY r.created_at DESC
-  `).bind(
-    debtId,
-    userId,
-    userId
-  ).all();
+  `).bind(debtId, userId, userId).all();
 
   return {
     success: true,
     repayments: (result.results || []).map((item) => ({
       id: item.id,
       debtId: item.debt_id,
+      createdByUserId: item.created_by_user_id,
       payerUserId: item.payer_user_id,
       payerEmail: item.payer_email,
       amountPaise: item.amount_paise,
