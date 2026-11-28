@@ -33,10 +33,16 @@ import {
 
 const app = new Hono();
 
-// Authentication routes
+// ==========================================
+// AUTHENTICATION
+// ==========================================
+
 app.route("/api/auth", auth);
 
-// Health check
+// ==========================================
+// HEALTH CHECK
+// ==========================================
+
 app.get("/api/health", (c) => {
   return c.json({
     success: true,
@@ -58,7 +64,7 @@ app.get("/api", (c) => {
 // CONNECTION SYSTEM
 // ==========================================
 
-// Send a connection request.
+// Send connection request.
 app.post("/api/connections/request", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -114,7 +120,7 @@ app.post("/api/connections/request", requireAuth, async (c) => {
   }
 });
 
-// Get incoming and outgoing connection requests.
+// Get connections.
 app.get("/api/connections", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -143,7 +149,7 @@ app.get("/api/connections", requireAuth, async (c) => {
   }
 });
 
-// Accept or reject an incoming connection request.
+// Accept or reject connection request.
 app.post("/api/connections/:id/respond", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -202,8 +208,7 @@ app.post("/api/connections/:id/respond", requireAuth, async (c) => {
 // CONNECTED DEBT SYSTEM
 // ==========================================
 
-// Create a new connected debt request.
-// direction: "borrowed" or "lent"
+// Create connected debt.
 app.post("/api/debts", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -279,7 +284,7 @@ app.post("/api/debts", requireAuth, async (c) => {
   }
 });
 
-// Get all connected debts for the logged-in user.
+// Get connected debts.
 app.get("/api/debts", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -308,7 +313,7 @@ app.get("/api/debts", requireAuth, async (c) => {
   }
 });
 
-// Accept or reject a connected debt request.
+// Confirm or reject connected debt.
 app.post("/api/debts/:id/respond", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -368,7 +373,8 @@ app.post("/api/debts/:id/respond", requireAuth, async (c) => {
 // REPAYMENT SYSTEM
 // ==========================================
 
-// Create a repayment request for one specific debt.
+// Create repayment request.
+// paidBy = "me" or "other".
 app.post(
   "/api/debts/:id/repayments",
   requireAuth,
@@ -387,11 +393,17 @@ app.post(
         !body ||
         !Number.isSafeInteger(body.amountPaise) ||
         body.amountPaise <= 0 ||
-        typeof body.requestId !== "string"
+        typeof body.requestId !== "string" ||
+        !body.requestId.trim() ||
+        body.requestId.length > 150 ||
+        (
+          body.paidBy !== undefined &&
+          !["me", "other"].includes(body.paidBy)
+        )
       ) {
         return c.json({
           success: false,
-          message: "Valid repayment amount aur request ID required hain."
+          message: "Valid repayment amount, request ID aur payer required hain."
         }, 400);
       }
 
@@ -417,7 +429,8 @@ app.post(
         c.req.param("id"),
         body.amountPaise,
         body.requestId,
-        body.originalCommand || null
+        body.originalCommand || null,
+        body.paidBy || "me"
       );
 
       return c.json(result, 201);
@@ -432,8 +445,9 @@ app.post(
         message.includes("Valid") ||
         message.includes("available balance") ||
         message.includes("authorized") ||
-        message.includes("not confirmed") ||
-        message.includes("already used")
+        message.includes("confirmed") ||
+        message.includes("already used") ||
+        message.includes("kisne")
       ) {
         return c.json({
           success: false,
@@ -449,7 +463,7 @@ app.post(
   }
 );
 
-// Get repayment history for one debt.
+// Get repayment history.
 app.get(
   "/api/debts/:id/repayments",
   requireAuth,
@@ -483,7 +497,7 @@ app.get(
   }
 );
 
-// Accept or reject a repayment request.
+// Confirm or reject repayment.
 app.post(
   "/api/repayments/:id/respond",
   requireAuth,
@@ -547,8 +561,7 @@ app.post(
 // AI COMMAND UNDERSTANDING
 // ==========================================
 
-// Guest and registered users can understand commands.
-// This route does not save anything to D1.
+// Understand commands only. No transaction is saved here.
 app.post("/api/command", async (c) => {
   try {
     const body = await c.req.json();
@@ -599,7 +612,7 @@ app.post("/api/command", async (c) => {
 // CUSTOMER LEDGER
 // ==========================================
 
-// Get only the logged-in user's customers.
+// Get customers.
 app.get("/api/customers", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -628,7 +641,7 @@ app.get("/api/customers", requireAuth, async (c) => {
   }
 });
 
-// Get a ledger only if it belongs to the logged-in user.
+// Get customer ledger.
 app.get("/api/customers/:id/ledger", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -666,10 +679,9 @@ app.get("/api/customers/:id/ledger", requireAuth, async (c) => {
 });
 
 // ==========================================
-// TRANSACTION CONFIRMATION
+// OLD TRANSACTION CONFIRMATION
 // ==========================================
 
-// Save only after explicit user confirmation.
 app.post(
   "/api/transactions/confirm",
   requireAuth,
@@ -755,7 +767,6 @@ app.post(
 // BASIC COMMAND PARSER
 // ==========================================
 
-// Testing route. Does not save anything.
 app.post("/api/command/basic", async (c) => {
   try {
     const body = await c.req.json();
