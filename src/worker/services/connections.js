@@ -37,16 +37,19 @@ export async function createConnectionRequest(
     throw new Error("Aap apne aap se connect nahi ho sakte.");
   }
 
+  // Check both directions for an existing pending or accepted request.
   const existing = await db.prepare(`
     SELECT id, status
     FROM connections
     WHERE (
-      requester_user_id = ?
-      AND recipient_user_id = ?
-    )
-    OR (
-      requester_user_id = ?
-      AND recipient_user_id = ?
+      (
+        requester_user_id = ?
+        AND recipient_user_id = ?
+      )
+      OR (
+        requester_user_id = ?
+        AND recipient_user_id = ?
+      )
     )
     AND status IN ('pending', 'accepted')
     LIMIT 1
@@ -62,7 +65,9 @@ export async function createConnectionRequest(
       throw new Error("Aap dono pehle se connected hain.");
     }
 
-    throw new Error("Aap dono ke beech connection request pehle se pending hai.");
+    throw new Error(
+      "Aap dono ke beech connection request pehle se pending hai."
+    );
   }
 
   const connectionId = crypto.randomUUID();
@@ -84,8 +89,13 @@ export async function createConnectionRequest(
   } catch (error) {
     const message = String(error?.message || "").toLowerCase();
 
-    if (message.includes("unique") || message.includes("constraint")) {
-      throw new Error("Connection request pehle se pending hai.");
+    if (
+      message.includes("unique") ||
+      message.includes("constraint")
+    ) {
+      throw new Error(
+        "Connection request pehle se pending hai."
+      );
     }
 
     throw error;
