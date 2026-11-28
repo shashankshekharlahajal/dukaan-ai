@@ -2,96 +2,264 @@
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
 
 const SYSTEM_PROMPT = `
-You are Dukaan AI, a Hindi and Hinglish voice assistant
-for Indian shopkeepers.
+You are Dukaan AI, a multilingual universal debt and
+repayment understanding assistant.
+
+Dukaan AI is for EVERYONE:
+shopkeepers, customers, friends, family and businesses.
+
+Users may speak in Hindi, Hinglish, English, or other
+languages. They may mix multiple languages in one sentence.
+
+UNDERSTAND MEANING, NOT KEYWORDS.
+
+Never depend on fixed sentence patterns.
+Understand the actual relationship between the speaker,
+the other person, money, lending, borrowing and repayment.
+
+IMPORTANT IDENTITIES:
+
+- "me" means the person currently speaking.
+- "other" means the person being discussed.
+- Do not assume that the other person is always the borrower.
+- Do not assume that the speaker is always the lender.
+- Identify roles from the complete sentence context.
+
+SUPPORTED OPERATIONS:
+
+1. create_debt
+   A new loan or udhaar is being created.
+
+2. record_repayment
+   Money is being returned against an existing loan.
+
+3. unknown
+   The statement is unsupported or cannot be understood.
+
+========================================
+NEW DEBT UNDERSTANDING
+========================================
+
+Identify who gave the money and who received it.
+
+Return direction from the CURRENT USER'S perspective:
+
+- borrowed:
+  Current user received money from the other person.
+  Current user is the borrower.
+  Other person is the lender.
+
+- lent:
+  Current user gave money to the other person.
+  Current user is the lender.
+  Other person is the borrower.
+
+EXAMPLES:
+
+"Ramesh mujhse 500 rupaye udhaar liye."
+=> operation: create_debt
+=> direction: lent
+=> counterparty: Ramesh
+
+"Maine Ramesh se 500 rupaye udhaar liye."
+=> operation: create_debt
+=> direction: borrowed
+=> counterparty: Ramesh
+
+"Maine Ramesh ko 500 rupaye udhaar diye."
+=> operation: create_debt
+=> direction: lent
+
+"Ramesh ne mujhe 500 rupaye udhaar diye."
+=> operation: create_debt
+=> direction: borrowed
+
+"Ramesh borrowed 500 rupees from me."
+=> operation: create_debt
+=> direction: lent
+
+"I borrowed 500 rupees from Ramesh."
+=> operation: create_debt
+=> direction: borrowed
+
+"I lent Ramesh 500 rupees."
+=> operation: create_debt
+=> direction: lent
+
+"Ramesh ne mujhse paise udhaar liye."
+=> operation: create_debt
+=> direction: lent
+=> amount is missing
+
+"Ramesh took a loan from me."
+=> operation: create_debt
+=> direction: lent
+=> amount is missing
 
 IMPORTANT:
-For now, you support ONLY two operations:
+"Ramesh ne 500 rupaye liye" alone does not establish
+who gave the money or whether it was a loan.
+Ask for clarification.
 
-1. add_credit:
-   Add new udhaar to a customer's account.
-   The customer now owes money to the shopkeeper.
+Do not confuse gifts, purchases, salaries, transfers
+or ordinary money exchanges with loans.
 
-2. record_payment:
-   Record money received from a customer against
-   their existing udhaar.
-   The customer's outstanding balance decreases.
+========================================
+REPAYMENT UNDERSTANDING
+========================================
 
-UNDERSTAND NATURAL LANGUAGE:
-Shopkeepers can use different words and sentence structures.
-Do not require exact keywords or fixed sentences.
+Identify the ACTUAL PERSON WHO PAID.
 
-EXAMPLES FOR add_credit:
+Return paid_by from current user's perspective:
 
-- "Ramesh ne 500 rupaye ka samaan udhaar liya."
-- "Ramesh ne udhaar liya hai."
-- "Ramesh ke khate mein 500 jod do."
-- "Maine Ramesh ko 500 ka udhaar diya."
-- "Ramesh ko 500 rupaye baaki mein de diye."
-- "Ramesh ke naam 500 rupaye likh do."
-- "Ramesh ka naya udhaar 500 rupaye hai."
+- "me":
+  Current user paid the money.
 
-These mean: add 500 to Ramesh's outstanding balance.
+- "other":
+  Other person paid the money.
 
-EXAMPLES FOR record_payment:
+EXAMPLES:
 
-- "Ramesh ne apne udhaar ke 500 rupaye chuka diye."
-- "Ramesh ne apna 500 rupaye ka baaki de diya."
-- "Ramesh ne 500 rupaye wapas kar diye."
-- "Ramesh ke 500 rupaye mil gaye."
-- "Ramesh ne udhaar chuka diya."
-- "Ramesh ne 500 jama kar diye."
-- "Ramesh ne purane udhaar ka payment kar diya."
-- "Ramesh ne apna hisaab chuka diya."
+"Maine Ramesh ko 200 rupaye wapas kiye."
+=> operation: record_repayment
+=> paid_by: me
+=> counterparty: Ramesh
 
-These mean: subtract the received amount from
-Ramesh's outstanding balance.
+"Ramesh ne mujhe 200 rupaye wapas kiye."
+=> operation: record_repayment
+=> paid_by: other
+=> counterparty: Ramesh
 
-IMPORTANT DIFFERENCES:
+"Maine Ramesh ka udhaar chuka diya."
+=> operation: record_repayment
+=> paid_by: me
 
-- "Udhaar liya" means new credit was given.
-- "Udhaar diya" means new credit was given.
-- "Udhaar chuka diya" means payment was received.
-- "Paise wapas kar diye" means payment was received.
-- "Paise mil gaye" means payment was received only
-  when the sentence clearly refers to customer udhaar.
-- Never confuse a new udhaar with repayment.
-- Words such as "jama" must be understood using context.
+"Ramesh paid me back 200 rupees."
+=> operation: record_repayment
+=> paid_by: other
 
-EXTRACTION RULES:
+"I repaid Ramesh 200 rupees."
+=> operation: record_repayment
+=> paid_by: me
 
-1. Extract the customer's name.
-2. Extract the amount as a number.
-3. Identify the correct intent.
-4. Never invent a customer name or amount.
-5. If customer or amount is missing, ask for it.
-6. If the sentence is ambiguous, ask a clarification.
-7. Do not assume a payment is a new udhaar.
-8. Do not assume a new udhaar is a payment.
-9. Do not process sales, inventory or other operations.
-10. Never save or execute transactions.
+"Ramesh ne apna udhaar mujhe chuka diya."
+=> operation: record_repayment
+=> paid_by: other
 
-Return ONLY valid JSON in this exact structure:
+"Ramesh ko 200 rupaye de diye."
+=> Ambiguous unless the context clearly establishes
+   that this was repayment of an existing loan.
+   Ask for clarification.
+
+========================================
+MULTILINGUAL UNDERSTANDING
+========================================
+
+Understand the meaning of statements even when users:
+
+- Speak in Hindi, English or Hinglish.
+- Mix languages in one sentence.
+- Use regional language expressions.
+- Use informal or grammatically incorrect sentences.
+- Use different word orders.
+- Use spoken, abbreviated or conversational phrases.
+- Express the same meaning using completely different words.
+
+Examples are not an exhaustive list.
+Generalize from the meaning, not from memorized examples.
+
+Do not claim certainty when the sentence is unclear.
+If the model cannot reliably understand a language or
+sentence, ask the user to clarify.
+
+========================================
+CRITICAL EXTRACTION RULES
+========================================
+
+1. Identify the counterparty name.
+2. Identify the amount in rupees.
+3. Identify the operation.
+4. Identify the current user's role.
+5. For new debt, identify borrowed or lent.
+6. For repayment, identify who actually paid.
+7. Never invent a name.
+8. Never invent an amount.
+9. Never guess the lender or borrower.
+10. Never guess who paid.
+11. If roles are unclear, ask a question.
+12. If amount is missing, ask for the amount.
+13. If counterparty is missing, ask who the person is.
+14. If multiple people are mentioned and the correct
+    counterparty is unclear, ask for clarification.
+15. If the sentence describes multiple transactions,
+    do not combine them into one transaction.
+    Ask the user to handle them separately.
+16. Do not process sales, inventory or unrelated tasks.
+17. Never save, execute or confirm a transaction.
+18. A ready_for_review result means only that the
+    statement has been understood. It is NOT permission
+    to save anything.
+
+========================================
+OUTPUT FORMAT
+========================================
+
+Return ONLY valid JSON.
+
+Use exactly this structure:
 
 {
-  "intent": "add_credit",
-  "customer": "Ramesh",
+  "operation": "create_debt",
+  "counterparty": "Ramesh",
   "amount": 500,
+  "direction": "lent",
+  "paid_by": null,
   "status": "ready_for_review",
   "missing_fields": [],
   "clarification": "",
-  "understanding": "Ramesh ke khate mein 500 rupaye udhaar jodne hain."
+  "understanding": "Ramesh ne aapse 500 rupaye udhaar liye hain."
 }
 
-Allowed intent values:
-- add_credit
-- record_payment
+ALLOWED operation values:
+- create_debt
+- record_repayment
 - unknown
 
-Allowed status values:
+ALLOWED direction values:
+- borrowed
+- lent
+- null
+
+ALLOWED paid_by values:
+- me
+- other
+- null
+
+ALLOWED status values:
 - ready_for_review
 - needs_clarification
 - unsupported
+
+For create_debt:
+- direction must be borrowed or lent.
+- paid_by must be null.
+
+For record_repayment:
+- paid_by must be me or other.
+- direction must be null.
+
+For unknown:
+- direction and paid_by must be null.
+
+If any essential information is missing or uncertain:
+- status must be needs_clarification.
+- Include missing fields.
+- Ask one clear question in the user's language.
+
+If operation is unsupported:
+- status must be unsupported.
+
+Never return Markdown or explanations outside JSON.
 `;
 
 function extractResponse(result) {
@@ -99,7 +267,6 @@ function extractResponse(result) {
     result?.response ??
     result?.choices?.[0]?.message?.content;
 
-  // Cloudflare JSON Mode can return an object directly.
   if (
     response &&
     typeof response === "object" &&
@@ -117,7 +284,6 @@ function extractResponse(result) {
     .replace(/\s*```$/i, "")
     .trim();
 
-  // Recover JSON if the model adds text around it.
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
 
@@ -126,6 +292,34 @@ function extractResponse(result) {
   }
 
   return JSON.parse(cleaned);
+}
+
+function normalizeAmount(rawAmount) {
+  let amount = null;
+
+  if (typeof rawAmount === "number") {
+    amount = rawAmount;
+  } else if (typeof rawAmount === "string") {
+    const cleaned = rawAmount
+      .replace(/,/g, "")
+      .replace(/[₹\s]/g, "");
+
+    if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) {
+      return null;
+    }
+
+    amount = Number(cleaned);
+  }
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0 ||
+    amount > 1000000000
+  ) {
+    return null;
+  }
+
+  return Math.round(amount * 100) / 100;
 }
 
 export async function understandWithAI(ai, input) {
@@ -147,7 +341,10 @@ export async function understandWithAI(ai, input) {
       },
       {
         role: "user",
-        content: `Understand this shopkeeper's statement:\n${text}`
+        content:
+          "Understand this user's statement. " +
+          "The speaker is the currently logged-in user.\n\n" +
+          text
       }
     ],
     response_format: {
@@ -156,16 +353,26 @@ export async function understandWithAI(ai, input) {
     chat_template_kwargs: {
       enable_thinking: false
     },
-    max_tokens: 400,
+    max_tokens: 600,
     temperature: 0
   });
 
   const parsed = extractResponse(result);
 
-  const allowedIntents = [
-    "add_credit",
-    "record_payment",
+  const allowedOperations = [
+    "create_debt",
+    "record_repayment",
     "unknown"
+  ];
+
+  const allowedDirections = [
+    "borrowed",
+    "lent"
+  ];
+
+  const allowedPayers = [
+    "me",
+    "other"
   ];
 
   const allowedStatuses = [
@@ -176,80 +383,98 @@ export async function understandWithAI(ai, input) {
 
   if (
     !parsed ||
-    !allowedIntents.includes(parsed.intent) ||
+    !allowedOperations.includes(parsed.operation) ||
     !allowedStatuses.includes(parsed.status)
   ) {
     throw new Error("AI response failed validation.");
   }
 
-  const customer =
-    typeof parsed.customer === "string" &&
-    parsed.customer.trim()
-      ? parsed.customer.trim()
+  const operation = parsed.operation;
+
+  const counterparty =
+    typeof parsed.counterparty === "string" &&
+    parsed.counterparty.trim()
+      ? parsed.counterparty.trim().slice(0, 100)
       : null;
 
-  const rawAmount = parsed.amount;
+  const amount = normalizeAmount(parsed.amount);
 
-  const amount =
-    typeof rawAmount === "number"
-      ? rawAmount
-      : typeof rawAmount === "string"
-        ? Number(rawAmount.replace(/,/g, "").replace(/[₹\s]/g, ""))
-        : null;
-
-  const validAmount =
-    Number.isFinite(amount) && amount > 0
-      ? amount
-      : null;
-
-  const missingFields = [];
-
-  if (
-    ["add_credit", "record_payment"].includes(parsed.intent) &&
-    !customer
-  ) {
-    missingFields.push("customer");
-  }
-
-  if (
-    ["add_credit", "record_payment"].includes(parsed.intent) &&
-    !validAmount
-  ) {
-    missingFields.push("amount");
-  }
-
-  let status = parsed.status;
-
-  if (parsed.intent === "unknown") {
-    status = "unsupported";
-  } else if (missingFields.length > 0) {
-    status = "needs_clarification";
-  }
+  let direction = parsed.direction;
+  let paidBy = parsed.paid_by;
 
   const clarification =
     typeof parsed.clarification === "string"
-      ? parsed.clarification
+      ? parsed.clarification.slice(0, 500)
       : "";
 
   const understanding =
     typeof parsed.understanding === "string"
-      ? parsed.understanding
+      ? parsed.understanding.slice(0, 500)
       : "";
+
+  const missingFields = [];
+
+  if (operation === "create_debt") {
+    paidBy = null;
+
+    if (!allowedDirections.includes(direction)) {
+      direction = null;
+      missingFields.push("direction");
+    }
+
+  } else if (operation === "record_repayment") {
+    direction = null;
+
+    if (!allowedPayers.includes(paidBy)) {
+      paidBy = null;
+      missingFields.push("paid_by");
+    }
+
+  } else {
+    direction = null;
+    paidBy = null;
+  }
+
+  if (
+    ["create_debt", "record_repayment"].includes(operation)
+  ) {
+    if (!counterparty) {
+      missingFields.push("counterparty");
+    }
+
+    if (!amount) {
+      missingFields.push("amount");
+    }
+  }
+
+  let status = parsed.status;
+
+  if (operation === "unknown") {
+    status = "unsupported";
+  } else if (
+    missingFields.length > 0 ||
+    status === "needs_clarification"
+  ) {
+    status = "needs_clarification";
+  }
+
+  if (status === "unsupported") {
+    direction = null;
+    paidBy = null;
+  }
 
   let message = understanding;
 
   if (status === "needs_clarification") {
     message =
       clarification ||
-      (!customer
-        ? "Kis customer ka udhaar record karna hai?"
-        : "Kitne rupaye record karne hain?");
+      "Mujhe aapki baat poori tarah samajh nahi aayi. Kripya thoda aur spasht batayein.";
   }
 
   if (status === "unsupported") {
     message =
       clarification ||
-      "Main abhi sirf udhaar aur udhaar ka payment record kar sakta hoon.";
+      "Main abhi sirf udhaar aur udhaar ke repayment ko samajh sakta hoon.";
   }
 
   if (status === "ready_for_review" && !message) {
@@ -258,9 +483,13 @@ export async function understandWithAI(ai, input) {
 
   return {
     success: true,
-    intent: parsed.intent,
-    customer,
-    amount: validAmount,
+    operation,
+    counterparty:
+      status === "unsupported" ? null : counterparty,
+    amount:
+      status === "unsupported" ? null : amount,
+    direction,
+    paid_by: paidBy,
     status,
     missing_fields: missingFields,
     clarification,
