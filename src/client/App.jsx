@@ -4,7 +4,8 @@ import "./styles/main.css";
 import { createSpeechRecognition } from "./services/speechRecognition.js";
 import {
   understandShopkeeperCommand,
-  confirmTransaction
+  createConnectedDebt,
+  createRepayment
 } from "./services/api.js";
 
 function createRequestId() {
@@ -18,10 +19,22 @@ function createRequestId() {
 async function fetchApi(url, options = {}) {
   const response = await fetch(url, {
     credentials: "same-origin",
-    ...options
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
   });
 
-  const result = await response.json();
+  const rawText = await response.text();
+
+  let result;
+
+  try {
+    result = JSON.parse(rawText);
+  } catch {
+    throw new Error(`Server response invalid hai. HTTP ${response.status}`);
+  }
 
   if (!response.ok || result.success === false) {
     throw new Error(result.message || "Request complete nahi ho paayi.");
@@ -47,7 +60,45 @@ function formatDate(date) {
 }
 
 function formatMoney(value) {
-  return Number(value || 0).toLocaleString("en-IN");
+  return Number(value || 0).toLocaleString("en-IN", {
+    maximumFractionDigits: 2
+  });
+}
+
+function toPaise(amount) {
+  const value = Number(amount);
+
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("Valid amount enter karein.");
+  }
+
+  const paise = Math.round(value * 100);
+
+  if (!Number.isSafeInteger(paise) || paise <= 0) {
+    throw new Error("Amount valid range mein nahi hai.");
+  }
+
+  return paise;
+}
+
+function normalizePerson(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function personMatches(counterparty, email) {
+  const name = normalizePerson(counterparty);
+  const address = normalizePerson(email);
+
+  if (!name || !address) return false;
+
+  const emailName = address.split("@")[0];
+
+  return (
+    name === address ||
+    name === emailName ||
+    emailName === name.replace(/\s+/g, "") ||
+    address.startsWith(`${name.replace(/\s+/g, "")}@`)
+  );
 }
 
 export default function App() {
@@ -76,6 +127,17 @@ export default function App() {
   const [requestId, setRequestId] = useState("");
   const [error, setError] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Universal debt system
+  const [debts, setDebts] = useState([]);
+  const [debtLoading, setDebtLoading] = useState(false);
+  const [debtError, setDebtError] = useState("");
+  const [debtMessage, setDebtMessage] = useState("");
+  const [debtActionId, setDebtActionId] = useState("");
+  const [selectedConnectionId, setSelectedConnectionId] = useState("");
+  const [selectedDebtId, setSelectedDebtId] = useState("");
+  const [repaymentsByDebt, setRepaymentsByDebt] = useState({});
+  const [repaymentLoadingId, setRepaymentLoadingId] = useState("");
 
   // Old customer ledger (preserved)
   const [customers, setCustomers] = useState([]);
@@ -114,9 +176,19 @@ export default function App() {
     checkSession();
   }, []);
 
-  // Load connections whenever the Connections page is opened.
+  // Load the data needed by the current page.
   useEffect(() => {
-    if (view === "connections" && authStatus === "user") {
+    if (authStatus !== "user") return;
+
+    if (
+      view === "home" ||
+      view === "borrowed" ||
+      view === "lent"
+    ) {
+      loadDebts();
+    }
+
+    if (view === "connections" || view === "assistant") {
       loadConnections();
     }
   }, [view, authStatus]);
@@ -160,9 +232,6 @@ export default function App() {
     try {
       const result = await fetchApi(`/api/auth/${authMode}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
         body: JSON.stringify({
           email: authEmail.trim(),
           password: authPassword
@@ -230,12 +299,18 @@ export default function App() {
     setCommandResult(null);
     setTransactionResult(null);
     setRequestId("");
+
     setCustomers([]);
     setSelectedLedger(null);
     setConnections([]);
+    setDebts([]);
+    setRepaymentsByDebt({});
+
     setConnectionEmail("");
     setConnectionError("");
     setConnectionMessage("");
+    setDebtError("");
+    setDebtMessage("");
     setError("");
   }
 
@@ -252,6 +327,8 @@ export default function App() {
     setLedgerError("");
     setConnectionError("");
     setConnectionMessage("");
+    setDebtError("");
+    setDebtMessage("");
   }
 
   // Old customer ledger
@@ -332,9 +409,6 @@ export default function App() {
     try {
       const result = await fetchApi("/api/connections/request", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
         body: JSON.stringify({ email })
       });
 
@@ -360,9 +434,6 @@ export default function App() {
         `/api/connections/${encodeURIComponent(connectionId)}/respond`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
           body: JSON.stringify({ decision })
         }
       );
@@ -382,7 +453,103 @@ export default function App() {
     }
   }
 
-  // Voice assistant
+  const incomingConnections = connections.filter(
+    (item) => item.direction === "incoming" && item.status === "pending"
+  );
+
+  const outgoingConnections = connections.filter(
+    (item) => item.direction === "outgoing" && item.status === "pending"
+  );
+
+  const acceptedConnections = connections.filter(
+    (item) => item.status === "accepted"
+  );
+
+  // Universal debt loading
+  async function loadDebts() {
+    setDebtLoading(true);
+    setDebtError("");
+
+    try {
+      const result = await fetchApi("/api/debts");
+      setDebts(result.debts || []);
+    } catch (err) {
+      setDebtError(err.message || "Udhaar records load nahi ho paaye.");
+    } finally {
+      setDebtLoading(false);
+    }
+  }
+
+  async function respondToDebt(debtId, decision) {
+    setDebtActionId(debtId);
+    setDebtError("");
+    setDebtMessage("");
+
+    try {
+      const result = await fetchApi(
+        `/api/debts/${encodeURIComponent(debtId)}/respond`,
+        {
+          method: "POST",
+          body: JSON.stringify({ decision })
+        }
+      );
+
+      setDebtMessage(result.message || "Udhaar request update ho gayi.");
+      await loadDebts();
+    } catch (err) {
+      setDebtError(err.message || "Udhaar request update nahi ho paayi.");
+    } finally {
+      setDebtActionId("");
+    }
+  }
+
+  async function loadRepayments(debtId) {
+    setRepaymentLoadingId(debtId);
+
+    try {
+      const result = await fetchApi(
+        `/api/debts/${encodeURIComponent(debtId)}/repayments`
+      );
+
+      setRepaymentsByDebt((previous) => ({
+        ...previous,
+        [debtId]: result.repayments || []
+      }));
+    } catch (err) {
+      setDebtError(err.message || "Repayment history load nahi ho paayi.");
+    } finally {
+      setRepaymentLoadingId("");
+    }
+  }
+
+  async function respondToRepayment(repaymentId, decision, debtId) {
+    setDebtActionId(repaymentId);
+    setDebtError("");
+    setDebtMessage("");
+
+    try {
+      const result = await fetchApi(
+        `/api/repayments/${encodeURIComponent(repaymentId)}/respond`,
+        {
+          method: "POST",
+          body: JSON.stringify({ decision })
+        }
+      );
+
+      setDebtMessage(result.message || "Repayment request update ho gayi.");
+
+      await Promise.all([
+        loadDebts(),
+        loadRepayments(debtId)
+      ]);
+    } catch (err) {
+      setDebtError(err.message || "Repayment response save nahi ho paaya.");
+    } finally {
+      setDebtActionId("");
+    }
+  }
+
+  // AI command understanding
   async function processCommand(text) {
     if (!text.trim()) {
       setError("Pehle apna command boliye ya likhiye.");
@@ -396,16 +563,20 @@ export default function App() {
     setCommandResult(null);
     setTransactionResult(null);
     setRequestId("");
+    setSelectedConnectionId("");
+    setSelectedDebtId("");
 
     try {
       const result = await understandShopkeeperCommand(text);
 
       setCommandResult(result);
+
       setRequestId(
         result.status === "ready_for_review"
           ? createRequestId()
           : ""
       );
+
       setPhase("review");
 
       speak(
@@ -447,17 +618,21 @@ Return the same required JSON structure.
     setError("");
     setPhase("thinking");
     setRequestId("");
+    setSelectedConnectionId("");
+    setSelectedDebtId("");
 
     try {
       const result = await understandShopkeeperCommand(correctedCommand);
 
       setCommandResult(result);
       setCorrectionText("");
+
       setRequestId(
         result.status === "ready_for_review"
           ? createRequestId()
           : ""
       );
+
       setPhase("review");
 
       speak(
@@ -544,6 +719,40 @@ Return the same required JSON structure.
     processCorrection(correctionText);
   }
 
+  // Match AI counterparty with accepted connections.
+  const matchedConnections = acceptedConnections.filter((connection) =>
+    personMatches(commandResult?.counterparty, connection.otherUser)
+  );
+
+  const matchingDebts = debts.filter((debt) => {
+    if (debt.status !== "confirmed" || debt.outstandingPaise <= 0) {
+      return false;
+    }
+
+    if (
+      commandResult?.operation === "record_repayment" &&
+      commandResult.paid_by === "me"
+    ) {
+      return (
+        debt.direction === "borrowed" &&
+        personMatches(commandResult.counterparty, debt.otherUser)
+      );
+    }
+
+    if (
+      commandResult?.operation === "record_repayment" &&
+      commandResult.paid_by === "other"
+    ) {
+      return (
+        debt.direction === "lent" &&
+        personMatches(commandResult.counterparty, debt.otherUser)
+      );
+    }
+
+    return false;
+  });
+
+  // Save only after explicit confirmation.
   async function handleConfirm() {
     if (authStatus !== "user") {
       setError("Transaction save karne ke liye login zaroori hai.");
@@ -559,13 +768,66 @@ Return the same required JSON structure.
       return;
     }
 
+    const operation = commandResult.operation;
+    const amount = Number(commandResult.amount);
+
     if (
-      !commandResult.customer ||
-      !Number.isFinite(Number(commandResult.amount)) ||
-      Number(commandResult.amount) <= 0 ||
-      !["add_credit", "record_payment"].includes(commandResult.intent)
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      !commandResult.counterparty
     ) {
-      setError("Transaction details valid nahi hain. Dobara check karein.");
+      setError("Naam ya amount valid nahi hai. Dobara check karein.");
+      return;
+    }
+
+    if (operation === "create_debt") {
+      if (!["borrowed", "lent"].includes(commandResult.direction)) {
+        setError("Udhaar ki direction clear nahi hai.");
+        return;
+      }
+
+      let connection = null;
+
+      if (selectedConnectionId) {
+        connection = acceptedConnections.find(
+          (item) => item.id === selectedConnectionId
+        );
+      } else if (matchedConnections.length === 1) {
+        connection = matchedConnections[0];
+      }
+
+      if (!connection) {
+        setError(
+          acceptedConnections.length === 0
+            ? "Pehle doosre user ke saath connection banayein."
+            : "Sahi connected user select karein."
+        );
+        return;
+      }
+
+      setSelectedConnectionId(connection.id);
+    } else if (operation === "record_repayment") {
+      if (!["me", "other"].includes(commandResult.paid_by)) {
+        setError("Kisne payment ki, ye clear nahi hai.");
+        return;
+      }
+
+      if (matchingDebts.length === 0) {
+        setError(
+          "Is person ke naam se matching confirmed udhaar nahi mila. Pehle correct udhaar record check karein."
+        );
+        return;
+      }
+
+      if (
+        matchingDebts.length > 1 &&
+        !matchingDebts.some((debt) => debt.id === selectedDebtId)
+      ) {
+        setError("Repayment ke liye specific udhaar record select karein.");
+        return;
+      }
+    } else {
+      setError("Ye command abhi supported nahi hai.");
       return;
     }
 
@@ -574,23 +836,58 @@ Return the same required JSON structure.
     setPhase("saving");
 
     try {
-      const result = await confirmTransaction({
-        confirmed: true,
-        customer: commandResult.customer,
-        amount: Number(commandResult.amount),
-        intent: commandResult.intent,
-        originalCommand: commandText,
-        requestId
+      const amountPaise = toPaise(amount);
+
+      let result;
+
+      if (operation === "create_debt") {
+        const connection =
+          acceptedConnections.find(
+            (item) => item.id === selectedConnectionId
+          );
+
+        result = await createConnectedDebt({
+          connectionId: connection.id,
+          direction: commandResult.direction,
+          amountPaise,
+          originalCommand: commandText
+        });
+      } else {
+        const selectedDebt = matchingDebts.find(
+          (debt) => debt.id === selectedDebtId
+        ) || (matchingDebts.length === 1 ? matchingDebts[0] : null);
+
+        if (!selectedDebt) {
+          throw new Error("Specific udhaar record select karein.");
+        }
+
+        result = await createRepayment({
+          debtId: selectedDebt.id,
+          amountPaise,
+          requestId,
+          paidBy: commandResult.paid_by,
+          originalCommand: commandText
+        });
+      }
+
+      setTransactionResult({
+        ...result,
+        operation,
+        amount,
+        counterparty: commandResult.counterparty
       });
 
-      setTransactionResult(result);
       setPhase("saved");
 
+      await loadDebts();
+
       speak(
-        `${result.customer} ka transaction save ho gaya hai. Ab unka baaki balance ${result.balance} rupaye hai.`
+        operation === "create_debt"
+          ? "Udhaar confirmation request bhej di gayi hai."
+          : "Repayment confirmation request bhej di gayi hai."
       );
     } catch (err) {
-      setError(err.message || "Transaction save nahi ho paayi.");
+      setError(err.message || "Request save nahi ho paayi.");
       setPhase("review");
     } finally {
       setIsProcessing(false);
@@ -610,31 +907,32 @@ Return the same required JSON structure.
     setCommandResult(null);
     setTransactionResult(null);
     setRequestId("");
+    setSelectedConnectionId("");
+    setSelectedDebtId("");
     setError("");
     setIsProcessing(false);
   }
-
-  const actionLabel =
-    commandResult?.intent === "add_credit"
-      ? "Naya udhaar"
-      : commandResult?.intent === "record_payment"
-        ? "Udhaar payment"
-        : "Action";
 
   const filteredCustomers = customers.filter((customer) =>
     customer.name.toLowerCase().includes(customerSearch.toLowerCase())
   );
 
-  const incomingConnections = connections.filter(
-    (item) => item.direction === "incoming" && item.status === "pending"
+  const confirmedDebts = debts.filter(
+    (debt) => debt.status === "confirmed"
   );
 
-  const outgoingConnections = connections.filter(
-    (item) => item.direction === "outgoing" && item.status === "pending"
-  );
+  const totalBorrowed = confirmedDebts
+    .filter((debt) => debt.direction === "borrowed")
+    .reduce((sum, debt) => sum + debt.outstandingPaise, 0);
 
-  const acceptedConnections = connections.filter(
-    (item) => item.status === "accepted"
+  const totalLent = confirmedDebts
+    .filter((debt) => debt.direction === "lent")
+    .reduce((sum, debt) => sum + debt.outstandingPaise, 0);
+
+  const pendingIncomingDebts = debts.filter(
+    (debt) =>
+      debt.status === "pending" &&
+      debt.createdByUserId !== user?.id
   );
 
   // Header
@@ -977,6 +1275,10 @@ Return the same required JSON structure.
           </div>
         </div>
 
+        {debtError && (
+          <p className="assistant-error" role="alert">{debtError}</p>
+        )}
+
         <div className="dashboard-summary">
           <button
             className="summary-card borrowed-card"
@@ -985,7 +1287,9 @@ Return the same required JSON structure.
           >
             <span className="summary-icon">↓</span>
             <span className="summary-label">Udhaar Liya</span>
-            <strong>—</strong>
+            <strong>
+              {debtLoading ? "..." : `₹${formatMoney(totalBorrowed / 100)}`}
+            </strong>
             <small>Jo aapko chukana hai</small>
             <span className="summary-link">View details →</span>
           </button>
@@ -997,11 +1301,59 @@ Return the same required JSON structure.
           >
             <span className="summary-icon">↑</span>
             <span className="summary-label">Udhaar Diya</span>
-            <strong>—</strong>
+            <strong>
+              {debtLoading ? "..." : `₹${formatMoney(totalLent / 100)}`}
+            </strong>
             <small>Jo aapko wapas milna hai</small>
             <span className="summary-link">View details →</span>
           </button>
         </div>
+
+        {pendingIncomingDebts.length > 0 && (
+          <section className="dashboard-section">
+            <div className="dashboard-section-heading">
+              <div>
+                <h2>Pending udhaar requests</h2>
+                <p>In requests par aapka response zaroori hai.</p>
+              </div>
+              <strong>{pendingIncomingDebts.length}</strong>
+            </div>
+
+            {pendingIncomingDebts.map((debt) => (
+              <article className="connection-card" key={debt.id}>
+                <div className="connection-person">
+                  <strong>{debt.otherUser}</strong>
+                  <span>
+                    {debt.direction === "borrowed"
+                      ? "Aapse udhaar liya bataya gaya hai"
+                      : "Aapko udhaar diya bataya gaya hai"}
+                  </span>
+                  <small>₹{formatMoney(debt.principalPaise / 100)}</small>
+                </div>
+
+                <div className="connection-buttons">
+                  <button
+                    className="connection-accept"
+                    type="button"
+                    disabled={debtActionId === debt.id}
+                    onClick={() => respondToDebt(debt.id, "confirmed")}
+                  >
+                    Accept
+                  </button>
+
+                  <button
+                    className="connection-reject"
+                    type="button"
+                    disabled={debtActionId === debt.id}
+                    onClick={() => respondToDebt(debt.id, "rejected")}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </article>
+            ))}
+          </section>
+        )}
 
         <section className="dashboard-section">
           <div className="dashboard-section-heading">
@@ -1057,9 +1409,19 @@ Return the same required JSON structure.
     );
   }
 
-  // Debt sections: UI is ready, backend endpoints are not implemented yet.
+  // Universal debt pages
   function DebtPage({ type }) {
     const isBorrowed = type === "borrowed";
+
+    const pageDebts = confirmedDebts.filter(
+      (debt) => debt.direction === type
+    );
+
+    const pendingDebts = debts.filter(
+      (debt) => debt.direction === type && debt.status === "pending"
+    );
+
+    const total = isBorrowed ? totalBorrowed : totalLent;
 
     return (
       <section className="ledger-main">
@@ -1082,36 +1444,255 @@ Return the same required JSON structure.
         </div>
 
         <div className={`debt-overview-card ${isBorrowed ? "debt-borrowed" : "debt-lent"}`}>
-          <span>{isBorrowed ? "Total amount you owe" : "Total amount owed to you"}</span>
-          <strong>—</strong>
-          <small>Balance data abhi connect nahi hua hai</small>
+          <span>
+            {isBorrowed ? "Total amount you owe" : "Total amount owed to you"}
+          </span>
+          <strong>₹{formatMoney(total / 100)}</strong>
+          <small>Confirmed outstanding balance</small>
         </div>
 
-        <div className="debt-empty-state">
-          <div className="debt-empty-icon">
-            {isBorrowed ? "↓" : "↑"}
+        {debtError && (
+          <p className="assistant-error" role="alert">{debtError}</p>
+        )}
+
+        {debtMessage && (
+          <p className="connection-success" role="status">{debtMessage}</p>
+        )}
+
+        {debtLoading ? (
+          <div className="thinking-panel">
+            <div className="thinking-loader"></div>
+            <strong>Udhaar records load ho rahe hain...</strong>
           </div>
+        ) : (
+          <>
+            {pendingDebts.length > 0 && (
+              <div className="connection-section">
+                <h2>Pending requests</h2>
 
-          <h2>
-            {isBorrowed
-              ? "Aapka Udhaar Liya"
-              : "Aapka Udhaar Diya"}
-          </h2>
+                {pendingDebts.map((debt) => {
+                  const isIncoming =
+                    debt.createdByUserId !== user?.id;
 
-          <p>
-            Is section ko real database records dikhane ke liye
-            debt aur repayment APIs implement karni hongi.
-            Abhi koi balance ya transaction yahan load nahi ho raha.
-          </p>
+                  return (
+                    <article className="connection-card" key={debt.id}>
+                      <div className="connection-person">
+                        <strong>{debt.otherUser}</strong>
+                        <span>
+                          ₹{formatMoney(debt.principalPaise / 100)}
+                        </span>
+                        <small>
+                          {isIncoming
+                            ? "Aapki confirmation ka intezaar"
+                            : "Doosre user ki confirmation ka intezaar"}
+                        </small>
+                      </div>
 
-          <button
-            className="popup-primary"
-            type="button"
-            onClick={() => navigateTo("assistant")}
-          >
-            🎙️ Voice Assistant kholein
-          </button>
-        </div>
+                      {isIncoming ? (
+                        <div className="connection-buttons">
+                          <button
+                            className="connection-accept"
+                            type="button"
+                            disabled={debtActionId === debt.id}
+                            onClick={() => respondToDebt(debt.id, "confirmed")}
+                          >
+                            Accept
+                          </button>
+
+                          <button
+                            className="connection-reject"
+                            type="button"
+                            disabled={debtActionId === debt.id}
+                            onClick={() => respondToDebt(debt.id, "rejected")}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="connection-status pending">
+                          Pending
+                        </span>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="connection-section">
+              <div className="connection-section-heading">
+                <h2>Confirmed records</h2>
+                <span>{pageDebts.length}</span>
+              </div>
+
+              {pageDebts.length === 0 ? (
+                <div className="debt-empty-state">
+                  <div className="debt-empty-icon">
+                    {isBorrowed ? "↓" : "↑"}
+                  </div>
+
+                  <h2>
+                    {isBorrowed ? "Koi udhaar nahi liya" : "Koi udhaar nahi diya"}
+                  </h2>
+
+                  <p>
+                    Confirmed udhaar records yahan dikhai denge.
+                    Naya record banane ke liye Voice Assistant use karein.
+                  </p>
+
+                  <button
+                    className="popup-primary"
+                    type="button"
+                    onClick={() => navigateTo("assistant")}
+                  >
+                    🎙️ Voice Assistant kholein
+                  </button>
+                </div>
+              ) : (
+                pageDebts.map((debt) => {
+                  const repayments = repaymentsByDebt[debt.id] || [];
+
+                  return (
+                    <article className="connection-card debt-record-card" key={debt.id}>
+                      <div className="connection-person">
+                        <strong>{debt.otherUser}</strong>
+
+                        <span>
+                          Original: ₹{formatMoney(debt.principalPaise / 100)}
+                        </span>
+
+                        <span>
+                          Repaid: ₹{formatMoney(debt.repaidPaise / 100)}
+                        </span>
+
+                        <strong>
+                          Baaki: ₹{formatMoney(debt.outstandingPaise / 100)}
+                        </strong>
+
+                        <small>{formatDate(debt.createdAt)}</small>
+                      </div>
+
+                      <div className="debt-record-actions">
+                        <button
+                          className="popup-secondary"
+                          type="button"
+                          onClick={() => loadRepayments(debt.id)}
+                          disabled={repaymentLoadingId === debt.id}
+                        >
+                          {repaymentLoadingId === debt.id
+                            ? "Loading..."
+                            : "Repayment history"}
+                        </button>
+
+                        {debt.outstandingPaise > 0 && (
+                          <button
+                            className="popup-primary"
+                            type="button"
+                            onClick={() => {
+                              setCommandText(
+                                debt.direction === "borrowed"
+                                  ? `Maine ${debt.otherUser} ko payment ki`
+                                  : `${debt.otherUser} ne mujhe payment ki`
+                              );
+                              setCommandResult(null);
+                              setSelectedDebtId(debt.id);
+                              navigateTo("assistant");
+                            }}
+                          >
+                            Record repayment
+                          </button>
+                        )}
+                      </div>
+
+                      {repaymentsByDebt[debt.id] && (
+                        <div className="repayment-history">
+                          <strong>Repayment requests</strong>
+
+                          {repayments.length === 0 ? (
+                            <p>Abhi koi repayment record nahi hai.</p>
+                          ) : (
+                            repayments.map((repayment) => (
+                              <div
+                                className="ledger-transaction"
+                                key={repayment.id}
+                              >
+                                <div className="transaction-info">
+                                  <strong>
+                                    ₹{formatMoney(repayment.amountPaise / 100)}
+                                  </strong>
+                                  <span>
+                                    {repayment.payerEmail ||
+                                      repayment.payerSide ||
+                                      "Repayment"}
+                                  </span>
+                                  <small>
+                                    {repayment.status} · {formatDate(repayment.createdAt)}
+                                  </small>
+                                </div>
+
+                                {repayment.status === "pending" &&
+                                  repayment.createdByUserId !== user?.id && (
+                                    <div className="connection-buttons">
+                                      <button
+                                        className="connection-accept"
+                                        type="button"
+                                        disabled={debtActionId === repayment.id}
+                                        onClick={() =>
+                                          respondToRepayment(
+                                            repayment.id,
+                                            "confirmed",
+                                            debt.id
+                                          )
+                                        }
+                                      >
+                                        Accept
+                                      </button>
+
+                                      <button
+                                        className="connection-reject"
+                                        type="button"
+                                        disabled={debtActionId === repayment.id}
+                                        onClick={() =>
+                                          respondToRepayment(
+                                            repayment.id,
+                                            "rejected",
+                                            debt.id
+                                          )
+                                        }
+                                      >
+                                        Reject
+                                      </button>
+                                    </div>
+                                  )}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </>
+        )}
+
+        <button
+          className="popup-primary"
+          type="button"
+          onClick={() => navigateTo("assistant")}
+        >
+          🎙️ Naya udhaar / repayment
+        </button>
+
+        <button
+          className="popup-secondary"
+          type="button"
+          onClick={loadDebts}
+          disabled={debtLoading}
+        >
+          ↻ Refresh records
+        </button>
       </section>
     );
   }
@@ -1163,15 +1744,11 @@ Return the same required JSON structure.
         </section>
 
         {connectionError && (
-          <p className="assistant-error" role="alert">
-            {connectionError}
-          </p>
+          <p className="assistant-error" role="alert">{connectionError}</p>
         )}
 
         {connectionMessage && (
-          <p className="connection-success" role="status">
-            {connectionMessage}
-          </p>
+          <p className="connection-success" role="status">{connectionMessage}</p>
         )}
 
         <div className="connection-section">
@@ -1326,9 +1903,7 @@ Return the same required JSON structure.
         </div>
 
         {ledgerError && (
-          <p className="assistant-error" role="alert">
-            {ledgerError}
-          </p>
+          <p className="assistant-error" role="alert">{ledgerError}</p>
         )}
 
         {ledgerLoading && (
@@ -1433,6 +2008,18 @@ Return the same required JSON structure.
 
   // Voice assistant screen
   function AssistantPage() {
+    const operation = commandResult?.operation;
+    const isDebtCommand = operation === "create_debt";
+    const isRepaymentCommand = operation === "record_repayment";
+
+    const needsConnectionChoice =
+      isDebtCommand &&
+      acceptedConnections.length > 0 &&
+      matchedConnections.length !== 1;
+
+    const needsDebtChoice =
+      isRepaymentCommand && matchingDebts.length > 1;
+
     return (
       <section className="assistant-main">
         <div className={`ai-orb orb-${phase}`}>
@@ -1455,8 +2042,8 @@ Return the same required JSON structure.
           {phase === "thinking" && "Samajh raha hoon..."}
           {phase === "review" && "Ek baar check kijiye"}
           {phase === "correction" && "Correction"}
-          {phase === "saving" && "Record save ho raha hai..."}
-          {phase === "saved" && "Transaction saved!"}
+          {phase === "saving" && "Request send ho rahi hai..."}
+          {phase === "saved" && "Request sent!"}
         </h1>
 
         <p className="assistant-subtitle">
@@ -1465,8 +2052,8 @@ Return the same required JSON structure.
           {phase === "thinking" && "Aapki baat samajhne ki koshish kar raha hoon."}
           {phase === "review" && "Maine aapki baat ko is tarah samjha hai."}
           {phase === "correction" && "Batayein, kya badalna hai."}
-          {phase === "saving" && "Aapka transaction save kar raha hoon."}
-          {phase === "saved" && "Aapka transaction record ho gaya hai."}
+          {phase === "saving" && "Doosre user ko confirmation request bhej rahe hain."}
+          {phase === "saved" && "Request doosre user ko bhej di gayi hai."}
         </p>
 
         <section className="assistant-popup" key={phase}>
@@ -1549,30 +2136,122 @@ Return the same required JSON structure.
               </p>
 
               <div className="review-details">
-                {commandResult.customer && (
+                {commandResult.counterparty && (
                   <div>
-                    <span>Customer</span>
-                    <strong>{commandResult.customer}</strong>
+                    <span>Person</span>
+                    <strong>{commandResult.counterparty}</strong>
                   </div>
                 )}
 
                 {commandResult.amount != null && (
                   <div>
                     <span>Amount</span>
-                    <strong>₹{commandResult.amount}</strong>
+                    <strong>₹{formatMoney(commandResult.amount)}</strong>
                   </div>
                 )}
 
-                {commandResult.intent && (
+                {isDebtCommand && (
                   <div>
-                    <span>Action</span>
-                    <strong>{actionLabel}</strong>
+                    <span>Direction</span>
+                    <strong>
+                      {commandResult.direction === "borrowed"
+                        ? "Udhaar Liya"
+                        : commandResult.direction === "lent"
+                          ? "Udhaar Diya"
+                          : "Not clear"}
+                    </strong>
+                  </div>
+                )}
+
+                {isRepaymentCommand && (
+                  <div>
+                    <span>Payment kisne ki?</span>
+                    <strong>
+                      {commandResult.paid_by === "me"
+                        ? "Maine"
+                        : commandResult.paid_by === "other"
+                          ? "Doosre person ne"
+                          : "Not clear"}
+                    </strong>
                   </div>
                 )}
               </div>
 
               {commandResult.status === "ready_for_review" ? (
                 <>
+                  {isDebtCommand && (
+                    <div className="review-selection">
+                      <label htmlFor="connection-select">
+                        Connected user select karein
+                      </label>
+
+                      {matchedConnections.length === 1 ? (
+                        <p>
+                          Matched: <strong>{matchedConnections[0].otherUser}</strong>
+                        </p>
+                      ) : acceptedConnections.length > 0 ? (
+                        <select
+                          id="connection-select"
+                          className="compact-input"
+                          value={selectedConnectionId}
+                          onChange={(event) =>
+                            setSelectedConnectionId(event.target.value)
+                          }
+                        >
+                          <option value="">Select connected user</option>
+                          {acceptedConnections.map((connection) => (
+                            <option value={connection.id} key={connection.id}>
+                              {connection.otherUser}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p>
+                          Abhi koi connected user nahi hai.
+                          Pehle Connections page par connect karein.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {isRepaymentCommand && (
+                    <div className="review-selection">
+                      <label htmlFor="debt-select">
+                        Kis udhaar ki repayment hai?
+                      </label>
+
+                      {matchingDebts.length === 1 ? (
+                        <p>
+                          <strong>
+                            {matchingDebts[0].otherUser} · ₹
+                            {formatMoney(matchingDebts[0].outstandingPaise / 100)} baaki
+                          </strong>
+                        </p>
+                      ) : matchingDebts.length > 1 ? (
+                        <select
+                          id="debt-select"
+                          className="compact-input"
+                          value={selectedDebtId}
+                          onChange={(event) =>
+                            setSelectedDebtId(event.target.value)
+                          }
+                        >
+                          <option value="">Select specific udhaar</option>
+                          {matchingDebts.map((debt) => (
+                            <option value={debt.id} key={debt.id}>
+                              {debt.otherUser} · ₹
+                              {formatMoney(debt.outstandingPaise / 100)} baaki
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p>
+                          Is person ka matching confirmed udhaar record nahi mila.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   <p className="popup-question">
                     {authStatus === "guest"
                       ? "Guest mode mein transaction save nahi hoga."
@@ -1585,9 +2264,15 @@ Return the same required JSON structure.
                         className="popup-primary"
                         type="button"
                         onClick={handleConfirm}
-                        disabled={isProcessing}
+                        disabled={
+                          isProcessing ||
+                          (isDebtCommand &&
+                            acceptedConnections.length === 0) ||
+                          (isRepaymentCommand &&
+                            matchingDebts.length === 0)
+                        }
                       >
-                        ✓ Haan, record karo
+                        ✓ Haan, confirm karo
                       </button>
 
                       <button
@@ -1684,7 +2369,7 @@ Return the same required JSON structure.
           {phase === "saving" && (
             <div className="thinking-panel">
               <div className="thinking-loader"></div>
-              <strong>Transaction save ho raha hai</strong>
+              <strong>Confirmation request send ho rahi hai</strong>
               <p>Kripya is process ko interrupt na karein.</p>
             </div>
           )}
@@ -1692,22 +2377,20 @@ Return the same required JSON structure.
           {phase === "saved" && transactionResult && (
             <div className="confirmed-panel">
               <div className="confirmed-icon">✓</div>
-              <strong>Transaction successfully saved!</strong>
-              <p>{transactionResult.customer}</p>
-              <p>Transaction: ₹{transactionResult.amount}</p>
+              <strong>Request successfully sent!</strong>
+
+              <p>{transactionResult.counterparty}</p>
+              <p>Amount: ₹{formatMoney(transactionResult.amount)}</p>
 
               <p>
-                {transactionResult.transactionType === "add_credit"
-                  ? "Naya udhaar add hua."
-                  : "Payment receive hua."}
+                {transactionResult.operation === "create_debt"
+                  ? "Udhaar confirmation request doosre user ko bhej di gayi hai."
+                  : "Repayment confirmation request doosre user ko bhej di gayi hai."}
               </p>
 
-              <div className="review-details">
-                <div>
-                  <span>Updated outstanding balance</span>
-                  <strong>₹{formatMoney(transactionResult.balance)}</strong>
-                </div>
-              </div>
+              <p className="privacy-note">
+                Doosre user ke confirm karne ke baad hi ye confirmed balance mein dikhega.
+              </p>
 
               <button
                 className="popup-primary"
@@ -1721,9 +2404,7 @@ Return the same required JSON structure.
         </section>
 
         {error && (
-          <p className="assistant-error" role="alert">
-            {error}
-          </p>
+          <p className="assistant-error" role="alert">{error}</p>
         )}
 
         <p className="privacy-note">
