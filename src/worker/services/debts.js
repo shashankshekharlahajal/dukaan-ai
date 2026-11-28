@@ -39,7 +39,6 @@ export async function createConnectedDebt(
     throw new Error("Valid udhaar amount enter karein.");
   }
 
-  // Only an accepted connection can be used.
   const connection = await db.prepare(`
     SELECT
       id,
@@ -61,9 +60,7 @@ export async function createConnectedDebt(
   ).first();
 
   if (!connection) {
-    throw new Error(
-      "Accepted connection nahi mila."
-    );
+    throw new Error("Accepted connection nahi mila.");
   }
 
   const otherUserId =
@@ -71,7 +68,6 @@ export async function createConnectedDebt(
       ? connection.recipient_user_id
       : connection.requester_user_id;
 
-  // Decide who is lender and who is borrower.
   const lenderUserId =
     direction === "borrowed"
       ? otherUserId
@@ -126,9 +122,7 @@ export async function createConnectedDebt(
   ).run();
 
   if (Number(result.meta?.changes || 0) !== 1) {
-    throw new Error(
-      "Udhaar request create nahi ho payi."
-    );
+    throw new Error("Udhaar request create nahi ho payi.");
   }
 
   return {
@@ -141,7 +135,7 @@ export async function createConnectedDebt(
   };
 }
 
-// The other connected user must confirm or reject.
+// Only the other connected user can confirm or reject.
 export async function respondToDebt(
   db,
   debtId,
@@ -166,7 +160,8 @@ export async function respondToDebt(
       status = ?,
       confirmed_by_user_id = ?,
       confirmed_at = CASE
-        WHEN ? = 'confirmed' THEN CURRENT_TIMESTAMP
+        WHEN ? = 'confirmed'
+        THEN CURRENT_TIMESTAMP
         ELSE NULL
       END
     WHERE
@@ -177,6 +172,24 @@ export async function respondToDebt(
       AND (
         lender_user_id = ?
         OR borrower_user_id = ?
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM connections c
+        WHERE
+          c.id = debts.connection_id
+          AND c.status = 'accepted'
+          AND (
+            (
+              c.requester_user_id = debts.lender_user_id
+              AND c.recipient_user_id = debts.borrower_user_id
+            )
+            OR
+            (
+              c.requester_user_id = debts.borrower_user_id
+              AND c.recipient_user_id = debts.lender_user_id
+            )
+          )
       )
   `).bind(
     decision,
@@ -260,25 +273,32 @@ export async function getConnectedDebts(db, userId) {
     const isBorrower =
       item.borrower_user_id === userId;
 
-    const outstandingPaise =
-      Math.max(
-        0,
-        item.principal_paise - item.repaid_paise
-      );
+    const outstandingPaise = Math.max(
+      0,
+      item.principal_paise - item.repaid_paise
+    );
 
     return {
       id: item.id,
       connectionId: item.connection_id,
+
+      // Who created this request?
+      createdByUserId: item.created_by_user_id,
+
       direction: isBorrower ? "borrowed" : "lent",
+
       otherUser:
         isBorrower
           ? item.lender_email
           : item.borrower_email,
+
       lenderUserId: item.lender_user_id,
       borrowerUserId: item.borrower_user_id,
+
       principalPaise: item.principal_paise,
       repaidPaise: item.repaid_paise,
       outstandingPaise,
+
       status: item.status,
       originalCommand: item.original_command,
       createdAt: item.created_at,
