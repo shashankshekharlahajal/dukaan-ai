@@ -22,6 +22,139 @@ const app = new Hono();
 // Authentication routes
 app.route("/api/auth", auth);
 
+// Send a connection request.
+app.post("/api/connections/request", requireAuth, async (c) => {
+  try {
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    const body = await c.req.json();
+
+    if (!body || typeof body.email !== "string") {
+      return c.json({
+        success: false,
+        message: "Recipient email is required."
+      }, 400);
+    }
+
+    const user = c.get("user");
+
+    const result = await createConnectionRequest(
+      c.env.DB,
+      user.id,
+      body.email
+    );
+
+    return c.json(result, 201);
+  } catch (error) {
+    console.error("CONNECTION REQUEST ERROR:", error);
+
+    const message = error?.message || "";
+
+    if (
+      message.includes("Valid") ||
+      message.includes("cannot") ||
+      message.includes("nahi mila") ||
+      message.includes("connected") ||
+      message.includes("pending") ||
+      message.includes("pehle")
+    ) {
+      return c.json({
+        success: false,
+        message
+      }, 400);
+    }
+
+    return c.json({
+      success: false,
+      message: "Connection request send nahi ho paayi."
+    }, 500);
+  }
+});
+
+// Get all incoming and outgoing connection requests.
+app.get("/api/connections", requireAuth, async (c) => {
+  try {
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    const user = c.get("user");
+
+    const result = await getConnections(
+      c.env.DB,
+      user.id
+    );
+
+    return c.json(result);
+  } catch (error) {
+    console.error("GET CONNECTIONS ERROR:", error);
+
+    return c.json({
+      success: false,
+      message: "Connections load nahi ho paaye."
+    }, 500);
+  }
+});
+
+// Accept or reject an incoming request.
+app.post("/api/connections/:id/respond", requireAuth, async (c) => {
+  try {
+    if (!c.env?.DB) {
+      return c.json({
+        success: false,
+        message: "Database connection is unavailable."
+      }, 503);
+    }
+
+    const body = await c.req.json();
+
+    if (
+      !body ||
+      !["accepted", "rejected"].includes(body.decision)
+    ) {
+      return c.json({
+        success: false,
+        message: "Decision must be accepted or rejected."
+      }, 400);
+    }
+
+    const user = c.get("user");
+
+    const result = await respondToConnectionRequest(
+      c.env.DB,
+      c.req.param("id"),
+      user.id,
+      body.decision
+    );
+
+    return c.json(result);
+  } catch (error) {
+    console.error("CONNECTION RESPONSE ERROR:", error);
+
+    const message = error?.message || "";
+
+    if (message.includes("Request nahi mili") || message.includes("Invalid")) {
+      return c.json({
+        success: false,
+        message
+      }, 400);
+    }
+
+    return c.json({
+      success: false,
+      message: "Connection response save nahi ho paaya."
+    }, 500);
+  }
+});
+
 // Health check
 app.get("/api/health", (c) => {
   return c.json({
