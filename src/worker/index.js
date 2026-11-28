@@ -1,12 +1,14 @@
 
 import { Hono } from "hono";
+
+import auth from "./routes/auth.js";
+import { requireAuth } from "./middleware/auth.js";
+
 import {
   createConnectionRequest,
   getConnections,
   respondToConnectionRequest
 } from "./services/connections.js";
-import auth from "./routes/auth.js";
-import { requireAuth } from "./middleware/auth.js";
 
 import { understandCommand } from "./services/command-understanding.js";
 import { understandWithAI } from "./services/ai-understanding.js";
@@ -21,6 +23,28 @@ const app = new Hono();
 
 // Authentication routes
 app.route("/api/auth", auth);
+
+// Health check
+app.get("/api/health", (c) => {
+  return c.json({
+    success: true,
+    app: "Dukaan AI",
+    status: "running",
+    aiBindingConfigured: Boolean(c.env?.AI),
+    dbBindingConfigured: Boolean(c.env?.DB)
+  });
+});
+
+app.get("/api", (c) => {
+  return c.json({
+    name: "Dukaan AI",
+    status: "running"
+  });
+});
+
+// ==========================================
+// CONNECTION SYSTEM
+// ==========================================
 
 // Send a connection request.
 app.post("/api/connections/request", requireAuth, async (c) => {
@@ -50,6 +74,7 @@ app.post("/api/connections/request", requireAuth, async (c) => {
     );
 
     return c.json(result, 201);
+
   } catch (error) {
     console.error("CONNECTION REQUEST ERROR:", error);
 
@@ -59,6 +84,7 @@ app.post("/api/connections/request", requireAuth, async (c) => {
       message.includes("Valid") ||
       message.includes("cannot") ||
       message.includes("nahi mila") ||
+      message.includes("nahi ho sakte") ||
       message.includes("connected") ||
       message.includes("pending") ||
       message.includes("pehle")
@@ -76,7 +102,7 @@ app.post("/api/connections/request", requireAuth, async (c) => {
   }
 });
 
-// Get all incoming and outgoing connection requests.
+// Get incoming and outgoing connection requests.
 app.get("/api/connections", requireAuth, async (c) => {
   try {
     if (!c.env?.DB) {
@@ -94,6 +120,7 @@ app.get("/api/connections", requireAuth, async (c) => {
     );
 
     return c.json(result);
+
   } catch (error) {
     console.error("GET CONNECTIONS ERROR:", error);
 
@@ -136,12 +163,16 @@ app.post("/api/connections/:id/respond", requireAuth, async (c) => {
     );
 
     return c.json(result);
+
   } catch (error) {
     console.error("CONNECTION RESPONSE ERROR:", error);
 
     const message = error?.message || "";
 
-    if (message.includes("Request nahi mili") || message.includes("Invalid")) {
+    if (
+      message.includes("Request nahi mili") ||
+      message.includes("Invalid")
+    ) {
       return c.json({
         success: false,
         message
@@ -155,27 +186,12 @@ app.post("/api/connections/:id/respond", requireAuth, async (c) => {
   }
 });
 
-// Health check
-app.get("/api/health", (c) => {
-  return c.json({
-    success: true,
-    app: "Dukaan AI",
-    status: "running",
-    aiBindingConfigured: Boolean(c.env?.AI),
-    dbBindingConfigured: Boolean(c.env?.DB)
-  });
-});
+// ==========================================
+// AI COMMAND UNDERSTANDING
+// ==========================================
 
-app.get("/api", (c) => {
-  return c.json({
-    name: "Dukaan AI",
-    status: "running"
-  });
-});
-
-// Understand shopkeeper's command using AI.
-// This route is available to guests too.
-// It does not save anything to D1.
+// Guest and registered users can understand commands.
+// This route does not save anything to D1.
 app.post("/api/command", async (c) => {
   try {
     const body = await c.req.json();
@@ -211,6 +227,7 @@ app.post("/api/command", async (c) => {
     );
 
     return c.json(result);
+
   } catch (error) {
     console.error("DUKAAN AI ERROR:", error);
 
@@ -220,6 +237,10 @@ app.post("/api/command", async (c) => {
     }, 500);
   }
 });
+
+// ==========================================
+// CUSTOMER LEDGER
+// ==========================================
 
 // Get only the logged-in user's customers.
 app.get("/api/customers", requireAuth, async (c) => {
@@ -239,6 +260,7 @@ app.get("/api/customers", requireAuth, async (c) => {
     );
 
     return c.json(result);
+
   } catch (error) {
     console.error("CUSTOMER LIST ERROR:", error);
 
@@ -275,6 +297,7 @@ app.get("/api/customers/:id/ledger", requireAuth, async (c) => {
     }
 
     return c.json(result);
+
   } catch (error) {
     console.error("CUSTOMER LEDGER ERROR:", error);
 
@@ -285,9 +308,11 @@ app.get("/api/customers/:id/ledger", requireAuth, async (c) => {
   }
 });
 
-// Save a transaction only after explicit confirmation.
-// Authentication is required.
-// Account ownership will be enforced in transactions.js next.
+// ==========================================
+// TRANSACTION CONFIRMATION
+// ==========================================
+
+// Save only after explicit user confirmation.
 app.post(
   "/api/transactions/confirm",
   requireAuth,
@@ -335,6 +360,7 @@ app.post(
       });
 
       return c.json(result);
+
     } catch (error) {
       console.error("TRANSACTION SAVE ERROR:", error);
 
@@ -368,8 +394,11 @@ app.post(
   }
 );
 
-// Basic parser route (kept for testing).
-// It does not save anything.
+// ==========================================
+// BASIC COMMAND PARSER
+// ==========================================
+
+// Testing route. Does not save anything.
 app.post("/api/command/basic", async (c) => {
   try {
     const body = await c.req.json();
@@ -387,6 +416,7 @@ app.post("/api/command/basic", async (c) => {
     }
 
     return c.json(understandCommand(body.text));
+
   } catch (error) {
     console.error("BASIC COMMAND ERROR:", error);
 
