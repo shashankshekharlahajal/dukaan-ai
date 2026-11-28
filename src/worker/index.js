@@ -1,5 +1,10 @@
 
 import { Hono } from "hono";
+import {
+  createConnectionRequest,
+  getConnections,
+  respondToConnectionRequest
+} from "./services/connections.js";
 import auth from "./routes/auth.js";
 import { requireAuth } from "./middleware/auth.js";
 
